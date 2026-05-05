@@ -93,7 +93,7 @@ def hybrid_rag_fetch(query: str, top_k: int = 1) -> str:
         response = supabase.table("transcripts") \
             .select("content") \
             .text_search("content", query) \
-            .limit(top_k) \
+            .range(0, top_k - 1) \
             .execute()
         
         if response.data:
@@ -103,7 +103,7 @@ def hybrid_rag_fetch(query: str, top_k: int = 1) -> str:
         fallback = supabase.table("transcripts") \
             .select("content") \
             .ilike("content", f"%{query[:20]}%") \
-            .limit(1) \
+            .range(0, 0) \
             .execute()
             
         if fallback.data:
@@ -154,7 +154,7 @@ async def generate_next_question_endpoint(request: InterviewRequest):
             response = supabase.table("transcripts") \
                 .select("content") \
                 .order("created_at", desc=True) \
-                .limit(1) \
+                .range(0, 0) \
                 .execute()
             
             if response.data:

@@ -7,7 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
-from prompts import JOURNALIST_BASE_PERSONA, FIRST_HOOK_TEMPLATE, FOLLOW_UP_LOOP_TEMPLATE
+import json
+from langchain_openai import OpenAIEmbeddings
+from prompts import JOURNALIST_BASE_PERSONA, EVALUATION_PHASE_PROMPT, GENERATION_PHASE_PROMPT
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -44,13 +46,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize LLM
+# Initialize AI components
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
+embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
 
 class InterviewRequest(BaseModel):
     expert_answer: str
-    last_question: Optional[str] = None
     user_session_id: str
+    topic: Optional[str] = "Clinical Scaling of SGLT2 Inhibitors"
 
 class YoutubeIngestRequest(BaseModel):
     url: str
@@ -82,62 +85,79 @@ def fetch_youtube_transcript(url: str) -> str:
     full_text = " ".join([item.text for item in transcript_list])
     return full_text
 
-def hybrid_rag_fetch(query: str, top_k: int = 1) -> str:
+def hybrid_rag_fetch(query: str, top_k: int = 2) -> str:
     """
-    Implementation of Hybrid RAG fetch using Supabase Client.
-    Uses text search on the transcripts table.
+    Advanced Hybrid RAG: Combines Semantic (Vector) + Exact (FTS) search.
     """
     try:
-        # Search using Supabase built-in text search
-        # Note: This requires the 'transcripts_content_idx' we created earlier
-        response = supabase.table("transcripts") \
+        # 1. Semantic Search (Vector)
+        query_vector = embeddings_model.embed_query(query)
+        vector_res = supabase.rpc("match_knowledge_chunks", {
+            "query_embedding": query_vector,
+            "match_threshold": 0.5,
+            "match_count": top_k
+        }).execute()
+        
+        # 2. Exact Search (FTS) - Fallback or Hybrid
+        fts_res = supabase.table("knowledge_chunks") \
             .select("content") \
             .text_search("content", query) \
-            .range(0, top_k - 1) \
+            .limit(top_k) \
             .execute()
         
-        if response.data:
-            return response.data[0]['content']
+        # Combine results
+        contexts = []
+        if vector_res.data:
+            contexts.extend([d['content'] for d in vector_res.data])
+        if fts_res.data:
+            contexts.extend([d['content'] for d in fts_res.data])
             
-        # Fallback to simple ILIKE search if text_search returns nothing
-        fallback = supabase.table("transcripts") \
-            .select("content") \
-            .ilike("content", f"%{query[:20]}%") \
-            .range(0, 0) \
-            .execute()
-            
-        if fallback.data:
-            return fallback.data[0]['content']
-
-        return "No specific technical context found in the database for this query."
+        return "\n---\n".join(list(set(contexts))[:3]) or "No relevant technical context found."
     except Exception as e:
-        logger.error(f"Database fetch error: {e}")
-        return "Database unavailable."
+        logger.error(f"RAG fetch error: {e}")
+        # Fallback to simple ILIKE if RPC match_knowledge_chunks isn't created yet
+        fallback = supabase.table("knowledge_chunks").select("content").ilike("content", f"%{query[:15]}%").limit(1).execute()
+        return fallback.data[0]['content'] if fallback.data else "Context unavailable."
 
 @app.post("/ingest-youtube")
 async def ingest_youtube_endpoint(request: YoutubeIngestRequest):
     try:
-        logger.info(f"Ingesting YouTube video: {request.url}")
+        logger.info(f"Hierarchical Ingestion started for: {request.url}")
         
-        # 1. Fetch Transcript
-        transcript = fetch_youtube_transcript(request.url)
+        # 1. Fetch Raw Transcript
+        raw_text = fetch_youtube_transcript(request.url)
         
-        # 2. Save to Supabase via Client
-        data = {
-            "video_url": request.url,
-            "content": transcript
-        }
-        supabase.table("transcripts").insert(data).execute()
+        # 2. Create Parent Source
+        source_res = supabase.table("knowledge_sources").insert({
+            "source_type": "youtube",
+            "title": f"YouTube Video: {request.url[-11:]}",
+            "url_or_identifier": request.url
+        }).execute()
         
-        word_count = len(transcript.split())
-        logger.info(f"Successfully persisted transcript to Supabase: {word_count} words.")
+        if not source_res.data:
+            raise Exception("Failed to create knowledge source")
+        source_id = source_res.data[0]['id']
+        
+        # 3. Chunking (Simple 1000-char chunks for demo)
+        chunks = [raw_text[i:i+1000] for i in range(0, len(raw_text), 800)]
+        
+        # 4. Generate Embeddings & Insert Chunks
+        chunk_data = []
+        for content in chunks:
+            vector = embeddings_model.embed_query(content)
+            chunk_data.append({
+                "source_id": source_id,
+                "content": content,
+                "embedding": vector
+            })
+        
+        supabase.table("knowledge_chunks").insert(chunk_data).execute()
         
         return {
             "status": "success",
-            "message": f"Successfully ingested {word_count} words. Data has been persisted to your Supabase Knowledge Hub via the Anon Key.",
-            "preview": transcript[:500] + "..."
+            "message": f"Ingested {len(chunks)} hierarchical chunks into Supabase.",
+            "source_id": source_id
         }
-        
     except Exception as e:
         logger.error(f"Ingestion error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -145,59 +165,76 @@ async def ingest_youtube_endpoint(request: YoutubeIngestRequest):
 @app.post("/generate-question")
 async def generate_next_question_endpoint(request: InterviewRequest):
     try:
+        session_id = request.user_session_id
         expert_answer = request.expert_answer.strip()
         
-        # Determine if this is the First Hook or a Follow-up
+        # 1. Retrieve Current Session State (Backlog)
+        try:
+            session_res = supabase.table("interview_sessions").select("question_backlog").eq("session_id", session_id).execute()
+            backlog = session_res.data[0]['question_backlog'] if (session_res.data and len(session_res.data) > 0) else []
+        except Exception as e:
+            logger.warning(f"Could not retrieve session from Supabase: {e}")
+            backlog = []
+        
         if not expert_answer:
-            # ... (First Hook logic remains same)
-            # Fetch the most recent transcript to use as the base for the First Hook
-            response = supabase.table("transcripts") \
-                .select("content") \
-                .order("created_at", desc=True) \
-                .range(0, 0) \
-                .execute()
-            
-            if response.data:
-                topic = f"the following knowledge base content: {response.data[0]['content'][:1000]}..."
-            else:
-                topic = "General Technical Thought-Leadership and Digital Transformation"
-            
-            prompt = FIRST_HOOK_TEMPLATE.format(
-                persona=JOURNALIST_BASE_PERSONA,
-                topic=topic
-            )
-        else:
-            # SAVE TACIT KNOWLEDGE: Persist the Expert's Insight to Supabase
-            try:
-                insight_data = {
-                    "session_id": request.user_session_id,
-                    "question": request.last_question,
-                    "answer": expert_answer
-                }
-                supabase.table("expert_insights").insert(insight_data).execute()
-                logger.info("Tacit knowledge successfully persisted to expert_insights table.")
-            except Exception as e:
-                logger.error(f"Failed to persist tacit knowledge: {e}")
+            # FIRST HOOK LOGIC
+            first_hook_prompt = f"{JOURNALIST_BASE_PERSONA}\n\nAsk a provocative opening question to start an interview about: {request.topic}"
+            response = llm.invoke(first_hook_prompt)
+            return {"question": response.content.strip(), "backlog": backlog}
 
-            # 1. Execute RAG fetch
-            db_context = hybrid_rag_fetch(query=expert_answer, top_k=1)
-            
-            # 2. Assemble Follow-up
-            prompt = FOLLOW_UP_LOOP_TEMPLATE.format(
-                persona=JOURNALIST_BASE_PERSONA,
-                db_context=db_context,
-                expert_answer=expert_answer
-            )
+        # 2. RETRIEVAL: Fetch Context from Hierarchical RAG
+        db_context = hybrid_rag_fetch(expert_answer)
         
-        # 3. Call LLM API
-        response = llm.invoke(prompt)
-        return {"question": response.content.strip()}
+        # 3. EVALUATION PHASE: Internal Monologue (JSON)
+        eval_prompt = EVALUATION_PHASE_PROMPT.format(
+            expert_answer=expert_answer,
+            db_context=db_context,
+            current_backlog=json.dumps(backlog)
+        )
+        eval_response = llm.invoke(eval_prompt)
         
-    except Exception as e:
-        import traceback
-        logger.error(f"Error generating question: {e}")
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+        try:
+            cleaned_json = eval_response.content.strip()
+            if "```json" in cleaned_json:
+                cleaned_json = cleaned_json.split("```json")[1].split("```")[0].strip()
+            eval_data = json.loads(cleaned_json)
+        except:
+            eval_data = {"pruned_questions": [], "new_gaps_found": [], "sync_found": {"is_synced": False}}
+
+        # 4. STATE UPDATE: Sync Backlog
+        remaining_backlog = [q for q in backlog if q not in eval_data.get("pruned_questions", [])]
+        remaining_backlog.extend(eval_data.get("new_gaps_found", []))
+        remaining_backlog = remaining_backlog[:5]
+        
+        try:
+            supabase.table("interview_sessions").upsert({
+                "session_id": session_id,
+                "question_backlog": remaining_backlog
+            }).execute()
+        except Exception as e:
+            logger.warning(f"Could not save session state: {e}")
+
+        # 5. GENERATION PHASE: Final Question
+        if eval_data.get("sync_found", {}).get("is_synced"):
+            target_q = eval_data["sync_found"]["target_backlog_question"]
+            scenario = f"The expert naturally synced with a backlogged topic. BRIDGE their answer to this question: {target_q}"
+        elif eval_data.get("new_gaps_found"):
+            scenario = f"A new conceptual gap was found: {eval_data['new_gaps_found'][0]}. Ask a targeted follow-up."
+        else:
+            scenario = "No specific gap found. Ask a general follow-up to push the narrative further."
+
+        gen_prompt = GENERATION_PHASE_PROMPT.format(
+            persona=JOURNALIST_BASE_PERSONA,
+            scenario_instruction=scenario,
+            expert_answer=expert_answer
+        )
+        
+        final_response = llm.invoke(gen_prompt)
+        return {
+            "question": final_response.content.strip(),
+            "backlog": remaining_backlog,
+            "internal_logic": eval_data
+        }
 
 if __name__ == "__main__":
     import uvicorn

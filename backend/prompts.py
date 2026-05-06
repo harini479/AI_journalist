@@ -16,33 +16,44 @@ ZERO-TRUST GROUNDING:
 - Do not hallucinate external facts; synthesize what is provided.
 """
 
-FIRST_HOOK_TEMPLATE = """
-{persona}
+# --- AGENTIC MEMORY: EVALUATION PHASE ---
+EVALUATION_PHASE_PROMPT = """
+You are the logic engine for an expert AI Journalist. 
+Your task is to analyze the state of the interview and return a STRICT JSON object.
 
-TASK: Generate the FIRST HOOK for a new interview session. 
-The current domain of interest is: {topic}
+EXPERT ANSWER: {expert_answer}
+RETRIEVED CONTEXT: {db_context}
+CURRENT BACKLOG: {current_backlog}
 
-GOAL: Ask a high-level but provocative technical question to open the expert's "Logic Vault." 
-Set the tone for a deep-dive investigation.
+Analyze the Expert's answer against the Backlog and the Database Context to identify what is resolved and what is missing.
 
-OUTPUT: Provide ONLY the question.
+Return a JSON object matching this exact schema:
+{{
+  "pruned_questions": [
+     // Array of strings from the CURRENT BACKLOG that the expert just answered.
+  ],
+  "new_gaps_found": [
+     // Array of strings detailing any NEW conceptual gaps found between the EXPERT ANSWER and RETRIEVED CONTEXT.
+  ],
+  "sync_found": {{
+     "is_synced": boolean, // True if the EXPERT ANSWER naturally connects to a remaining BACKLOG question.
+     "target_backlog_question": "string" // The specific backlog question that syncs perfectly.
+  }}
+}}
 """
 
-FOLLOW_UP_LOOP_TEMPLATE = """
+# --- AGENTIC MEMORY: GENERATION PHASE ---
+GENERATION_PHASE_PROMPT = """
 {persona}
 
-CURRENT CONTEXT FROM KNOWLEDGE HUB:
-\"\"\"{db_context}\"\"\"
+TASK: Generate the final question for the expert.
 
-EXPERT'S LAST ANSWER:
-\"\"\"{expert_answer}\"\"\"
+SCENARIO:
+{scenario_instruction}
 
-TASK:
-1. THE BRIDGE: Briefly (max 10 words) acknowledge the most technical/novel part of the expert's answer.
-2. THE GAP: Compare the answer to the DATABASE CONTEXT. What is missing? What specific "how" or "why" is left unanswered?
-3. THE HOOK: Generate a highly targeted follow-up question that forces the expert to explain their "hidden logic" or specific technical trade-offs.
+EXPERT'S LAST STATEMENT:
+{expert_answer}
 
-CRITICAL RULES:
-- Output ONLY the "Bridge + Question" (e.g., "Given your point on [X], how do you reconcile [Y]?").
-- No preambles or conversational filler.
+GOAL: Maintain a high-fidelity, professional narrative.
+OUTPUT: Provide ONLY the bridge (if applicable) and the question.
 """

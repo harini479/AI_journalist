@@ -1,15 +1,15 @@
+# ========================
 # Environment Variables
+# ========================
 .env
 .env.local
 .env.*.local
+.env.bak
+.env.tmp
 
-# Node.js
-node_modules/
-dist/
-dist-ssr/
-*.local
-
+# ========================
 # Python
+# ========================
 __pycache__/
 *.py[cod]
 *$py.class
@@ -17,19 +17,60 @@ __pycache__/
 venv/
 ENV/
 env/
-.env.bak
-.env.tmp
+*.egg-info/
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
 
-# Database
-*.db
-*.sqlite3
+# ========================
+# Node.js / Frontend
+# ========================
+node_modules/
+dist/
+dist-ssr/
+*.local
+.npm
+.cache
 
+# ========================
+# Temp / Exploded DOCX dirs
+# (internal Word XML — not source code)
+# ========================
+temp_doc/
+temp_hla/
+temp_lla/
+temp_overview/
+
+# ========================
+# Docs — ignore large binaries
+# ========================
+docs/*.pdf
+docs/~$*
+
+# ========================
 # Logs
+# ========================
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
+# ========================
 # OS Files
+# ========================
 .DS_Store
 Thumbs.db
+Desktop.ini
+
+# ========================
+# IDE / Editor
+# ========================
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.code-workspace

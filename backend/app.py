@@ -1,14 +1,17 @@
 import os
+import re
+import json
 import logging
 from typing import Optional
+
 from supabase import create_client, Client
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from dotenv import load_dotenv
-import json
-from langchain_openai import OpenAIEmbeddings
+from youtube_transcript_api import YouTubeTranscriptApi
+
 from prompts import JOURNALIST_BASE_PERSONA, EVALUATION_PHASE_PROMPT, GENERATION_PHASE_PROMPT
 
 # Setup logging
@@ -53,15 +56,13 @@ embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
 class InterviewRequest(BaseModel):
     expert_answer: str
     user_session_id: str
-    topic: Optional[str] = "Clinical Scaling of SGLT2 Inhibitors"
+    topic: Optional[str] = "Early Childhood Parenting, Baby Care & Development"
 
 class YoutubeIngestRequest(BaseModel):
     url: str
 
 def fetch_youtube_transcript(url: str) -> str:
     """Fetches transcript for a YouTube video URL."""
-    from youtube_transcript_api import YouTubeTranscriptApi
-    import re
     
     # Extract video ID
     video_id_match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", url)
@@ -235,6 +236,9 @@ async def generate_next_question_endpoint(request: InterviewRequest):
             "backlog": remaining_backlog,
             "internal_logic": eval_data
         }
+    except Exception as e:
+        logger.error(f"Question generation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

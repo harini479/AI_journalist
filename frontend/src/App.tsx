@@ -5,43 +5,79 @@ import {
   MicOff, 
   Send, 
   BrainCircuit, 
-  Database, 
   ChevronRight, 
   History,
-  Info,
   ShieldCheck,
   CloudDownload,
   Link,
   Loader2,
   CheckCircle,
-  AlertCircle
+  Terminal,
+  Activity,
+  FileText,
+  Map,
+  Compass
 } from 'lucide-react';
+
+interface Decision {
+  action: string;
+  internal_monologue: string;
+  scripted_question_resolved?: boolean;
+  tangent_detected?: {
+    exists: boolean;
+    topic: string | null;
+  };
+  bridge_suggestion?: string;
+}
 
 interface Message {
   id: string;
   role: 'expert' | 'ai';
   text: string;
   timestamp: number;
+  decision?: Decision;
+  script_progress?: string;
 }
 
-const API_URL = 'http://localhost:8001/generate-question';
+interface ScriptPhase {
+  phase_goal: string;
+  questions: any[];
+}
+
+interface InterviewScript {
+  interview_arc: {
+    phase_1_warmup: ScriptPhase;
+    phase_2_deep_dives: ScriptPhase;
+    phase_3_challenge: ScriptPhase;
+    phase_4_synthesis: ScriptPhase;
+  };
+}
+
+const API_BASE = 'http://localhost:8001';
 
 const App: React.FC = () => {
-  const [view, setView] = useState<'landing' | 'interview' | 'ingest'>('landing');
+  const [view, setView] = useState<'landing' | 'prepare' | 'interview' | 'ingest'>('landing');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isPreparing, setIsPreparing] = useState(false);
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [ingestionStatus, setIngestionStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [ingestionResult, setIngestionResult] = useState<string>('');
+  const [script, setScript] = useState<InterviewScript | null>(null);
+  const [themes, setThemes] = useState<any[]>([]);
+  const [openDecisionId, setOpenDecisionId] = useState<string | null>(null);
+  const [scriptProgress, setScriptProgress] = useState<string>('0/0');
+  
   const scrollRef = useRef<HTMLDivElement>(null);
+  const sessionId = 'demo-session-002'; // Unique for this demo
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, openDecisionId]);
 
   // Trigger First Hook automatically when entering interview view
   useEffect(() => {
@@ -50,11 +86,26 @@ const App: React.FC = () => {
     }
   }, [view]);
 
+  const handlePrepareInterview = async () => {
+    setIsPreparing(true);
+    setView('prepare');
+    try {
+      const response = await axios.post(`${API_BASE}/prepare-interview`, {
+        user_session_id: sessionId,
+        topic: "Technical Scaling in SaaS"
+      });
+      setScript(response.data.script);
+      setThemes(response.data.themes);
+    } catch (error) {
+      console.error("Preparation error:", error);
+    } finally {
+      setIsPreparing(false);
+    }
+  };
+
   const handleSend = async (text: string) => {
-    // Only block empty strings if it's NOT the first message (which triggers the hook)
     if (!text.trim() && messages.length > 0) return;
 
-    // Only add a message to the UI if there is actual text
     if (text.trim()) {
       const expertMsg: Message = {
         id: Date.now().toString(),
@@ -69,23 +120,22 @@ const App: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // Find the last AI question to send for persistence
-      const lastAIQuestion = messages.filter(m => m.role === 'ai').pop()?.text;
-
-      const response = await axios.post(API_URL, {
+      const response = await axios.post(`${API_BASE}/generate-question`, {
         expert_answer: text,
-        last_question: lastAIQuestion || null,
-        user_session_id: 'demo-session-001'
+        user_session_id: sessionId
       });
 
       const aiMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: 'ai',
         text: response.data.question,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        decision: response.data.decision,
+        script_progress: response.data.script_progress
       };
 
       setMessages(prev => [...prev, aiMsg]);
+      setScriptProgress(response.data.script_progress || 'Reactive');
     } catch (error) {
       console.error("Error calling backend:", error);
       const errorMsg: Message = {
@@ -106,19 +156,15 @@ const App: React.FC = () => {
       console.log("Starting Web Audio API capture...");
     } else {
       console.log("Stopping capture and processing audio...");
-      handleSend("In my experience, the biggest bottleneck in heart failure treatment is patient adherence to diuretic therapy.");
+      handleSend("In my experience, horizontal scaling is preferred for stateless microservices, but database sharding is where the real complexity begins.");
     }
-  };
-
-  const handleStartInterview = () => {
-    setView('interview');
   };
 
   const handleIngestYoutube = async () => {
     if (!youtubeUrl.trim()) return;
     setIngestionStatus('loading');
     try {
-      const response = await axios.post('http://localhost:8001/ingest-youtube', {
+      const response = await axios.post(`${API_BASE}/ingest-youtube`, {
         url: youtubeUrl
       });
       setIngestionStatus('success');
@@ -150,7 +196,7 @@ const App: React.FC = () => {
 
           <div className="flex flex-wrap justify-center gap-6">
             <button
-              onClick={handleStartInterview}
+              onClick={handlePrepareInterview}
               className="px-8 py-5 rounded-2xl premium-gradient text-white font-bold text-lg shadow-2xl shadow-indigo-500/30 hover:scale-105 transition-all flex items-center gap-3"
             >
               Initialize Interview <ChevronRight className="w-5 h-5" />
@@ -161,6 +207,89 @@ const App: React.FC = () => {
             >
               <CloudDownload className="w-5 h-5 text-accent" /> Ingestion Tower
             </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'prepare') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 text-slate-50 p-6 relative overflow-hidden">
+        <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_10%,_rgba(99,102,241,0.1),_transparent_60%)] pointer-events-none" />
+        
+        <div className="max-w-4xl w-full relative z-10">
+          <button 
+            onClick={() => setView('landing')}
+            className="mb-8 text-slate-500 hover:text-white transition-all flex items-center gap-2 text-xs font-black uppercase tracking-widest group"
+          >
+            <ChevronRight className="w-4 h-4 rotate-180 group-hover:-translate-x-1 transition-transform" /> Back to Dashboard
+          </button>
+
+          <div className="glass-morphism p-10 rounded-[2.5rem] border border-slate-800 shadow-2xl">
+            {isPreparing ? (
+              <div className="py-20 flex flex-col items-center text-center">
+                <Loader2 className="w-16 h-16 text-indigo-400 animate-spin mb-8" />
+                <h2 className="text-3xl font-black mb-4">Researching Knowledge Base</h2>
+                <p className="text-slate-400 font-medium max-w-md">Scanning hierarchical chunks, extracting core themes, and crafting a targeted interview script...</p>
+              </div>
+            ) : (
+              <div className="space-y-10 animate-in fade-in duration-700">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-5">
+                    <div className="p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/20">
+                      <FileText className="w-8 h-8 text-indigo-400" />
+                    </div>
+                    <div>
+                      <h2 className="text-3xl font-black tracking-tight">Interview Script</h2>
+                      <p className="text-slate-500 font-medium">12 Questions across 4 Narrative Phases</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setView('interview')}
+                    className="px-8 py-4 rounded-2xl premium-gradient text-white font-black text-lg shadow-xl hover:scale-105 transition-all"
+                  >
+                    Start Interview
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="space-y-6">
+                    <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2">
+                      <Map className="w-4 h-4" /> Extracted Themes
+                    </h3>
+                    <div className="space-y-4">
+                      {themes.map((theme: any) => (
+                        <div key={theme.theme_id} className="p-5 rounded-2xl bg-slate-900/50 border border-slate-800 hover:border-indigo-500/30 transition-all">
+                          <h4 className="font-bold text-indigo-400 mb-2">{theme.theme_title}</h4>
+                          <p className="text-sm text-slate-400 leading-relaxed">{theme.editorial_rationale}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-6">
+                    <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2">
+                      <Terminal className="w-4 h-4" /> Script Preview
+                    </h3>
+                    <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                      {Object.entries(script?.interview_arc || {}).map(([key, phase]: [string, any]) => (
+                        <div key={key} className="space-y-3">
+                          <div className="text-[10px] font-black uppercase tracking-widest text-indigo-500/50 mb-2">
+                            {key.replace('phase_', '').replace('_', ' ')}
+                          </div>
+                          {phase.questions.map((q: any) => (
+                            <div key={q.question_id} className="p-4 rounded-xl bg-slate-900 border border-slate-800 text-sm font-medium">
+                              {q.question_text}
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -235,18 +364,6 @@ const App: React.FC = () => {
                   </div>
                 </div>
               )}
-
-              {ingestionStatus === 'error' && (
-                <div className="p-6 bg-red-500/10 border border-red-500/20 rounded-2xl flex gap-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  <div className="p-2 bg-red-500/20 rounded-lg h-fit">
-                    <AlertCircle className="w-6 h-6 text-red-400" />
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-red-400 text-lg">Extraction Fault</h4>
-                    <p className="text-sm text-red-500/70 mt-1 leading-relaxed">The pipeline was unable to resolve the transcript. Please verify the URL and ensure captions are enabled.</p>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         </div>
@@ -256,7 +373,6 @@ const App: React.FC = () => {
 
   return (
     <div className="chat-container">
-      {/* Header */}
       <header className="p-6 flex items-center justify-between border-b glass-morphism sticky top-0 z-20">
         <div className="flex items-center gap-4">
           <button 
@@ -274,8 +390,11 @@ const App: React.FC = () => {
         </div>
         
         <div className="flex items-center gap-5">
-          <div className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-black uppercase tracking-widest text-slate-500">
-            Session: Demo-001
+          <div className="flex flex-col items-end">
+            <div className="px-3 py-1 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-black uppercase tracking-widest text-slate-400">
+              Script Progress
+            </div>
+            <div className="text-xs font-black text-indigo-400 mt-1">{scriptProgress} Questions</div>
           </div>
           <button className="p-2 text-slate-500 hover:text-white transition-colors">
             <History className="w-5 h-5" />
@@ -283,39 +402,71 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      {/* Message Feed */}
       <div 
         ref={scrollRef}
-        className="flex-1 overflow-y-auto p-8 flex flex-col"
+        className="flex-1 overflow-y-auto p-8 flex flex-col space-y-6"
       >
-        {messages.length === 0 && (
-          <div className="flex-1 flex flex-col items-center justify-center text-center p-12">
-            <div className="w-24 h-24 rounded-[2rem] bg-slate-900 border border-slate-800 flex items-center justify-center mb-8 animate-float shadow-2xl">
-              <Database className="w-10 h-10 text-accent" />
-            </div>
-            <h2 className="text-3xl font-black mb-4">Initialize Extraction</h2>
-            <p className="text-slate-500 max-w-sm font-medium leading-relaxed">
-              Press the microphone to record your insight or type your first answer below to activate the RAG engine.
-            </p>
-          </div>
-        )}
-
         {messages.map((msg) => (
-          <div 
-            key={msg.id}
-            className={`message-bubble ${msg.role === 'expert' ? 'expert-message' : 'ai-message'}`}
-          >
-            {msg.role === 'ai' && (
-              <div className="flex items-center gap-2 mb-3 text-[10px] font-black uppercase tracking-widest text-accent-light opacity-80">
-                <ShieldCheck className="w-3 h-3" /> Grounded Follow-up
+          <div key={msg.id} className="flex flex-col group">
+            <div 
+              className={`message-bubble max-w-[80%] ${msg.role === 'expert' ? 'expert-message self-end' : 'ai-message self-start'}`}
+            >
+              {msg.role === 'ai' && (
+                <div className="flex items-center justify-between gap-2 mb-3 text-[10px] font-black uppercase tracking-widest text-accent-light opacity-80">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-3 h-3" /> Grounded Follow-up
+                  </div>
+                  {msg.script_progress && (
+                    <span className="text-slate-500">Q {msg.script_progress}</span>
+                  )}
+                </div>
+              )}
+              <p className="font-medium leading-relaxed">{msg.text}</p>
+            </div>
+            
+            {msg.role === 'ai' && msg.decision && (
+              <div className="self-start ml-4 mt-2">
+                <button 
+                  onClick={() => setOpenDecisionId(openDecisionId === msg.id ? null : msg.id)}
+                  className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-slate-500 hover:text-indigo-400 transition-colors"
+                >
+                  <Activity className="w-3 h-3" /> 
+                  {openDecisionId === msg.id ? 'Hide Decision Log' : 'View Decision Log'}
+                </button>
+                
+                {openDecisionId === msg.id && (
+                  <div className="mt-3 p-5 rounded-2xl bg-slate-900 border border-slate-800 w-full max-w-xl animate-in slide-in-from-top-2 duration-300">
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Action: {msg.decision.action}</span>
+                        <span className={`text-[10px] font-black uppercase tracking-widest ${msg.decision.scripted_question_resolved ? 'text-emerald-500' : 'text-amber-500'}`}>
+                          {msg.decision.scripted_question_resolved ? '✓ Question Resolved' : '○ Continuing Thread'}
+                        </span>
+                      </div>
+                      
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-600">Internal Monologue</span>
+                        <p className="text-xs text-slate-300 italic">"{msg.decision.internal_monologue}"</p>
+                      </div>
+
+                      {msg.decision.tangent_detected?.exists && (
+                        <div className="p-3 rounded-lg bg-indigo-500/5 border border-indigo-500/10">
+                          <span className="text-[10px] font-black uppercase tracking-widest text-indigo-400 flex items-center gap-2">
+                            <Compass className="w-3 h-3" /> Tangent Detected
+                          </span>
+                          <p className="text-[11px] text-indigo-300/70 mt-1">Found high-value thread: "{msg.decision.tangent_detected.topic}"</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
-            <p className="font-medium">{msg.text}</p>
           </div>
         ))}
 
         {isLoading && (
-          <div className="ai-message message-bubble opacity-60 flex items-center gap-4">
+          <div className="ai-message message-bubble self-start opacity-60 flex items-center gap-4">
             <div className="flex gap-1.5">
               <div className="w-2 h-2 bg-accent rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
               <div className="w-2 h-2 bg-accent rounded-full animate-bounce" style={{ animationDelay: '200ms' }} />
@@ -326,7 +477,6 @@ const App: React.FC = () => {
         )}
       </div>
 
-      {/* Input Area */}
       <footer className="stt-bar">
         <div className="max-w-2xl mx-auto flex items-center gap-4 bg-slate-900/80 backdrop-blur-md p-3 rounded-3xl border border-slate-800 focus-within:border-accent focus-within:shadow-[0_0_30px_rgba(99,102,241,0.15)] transition-all">
           <button 
@@ -339,8 +489,7 @@ const App: React.FC = () => {
           <input 
             type="text" 
             className="flex-1 bg-transparent border-none outline-none py-4 px-4 text-slate-50 placeholder:text-slate-600 font-medium text-lg"
-            style={{ color: '#f8fafc' }}
-            placeholder="Document your clinical insight..."
+            placeholder="Document your insight..."
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSend(inputText)}

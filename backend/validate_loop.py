@@ -11,7 +11,7 @@ def test_interview_loop():
     payload = {
         "expert_answer": "",
         "user_session_id": "test-session-123",
-        "topic": "The future of AI in Clinical Healthcare"
+        "topic": "Enterprise Pre-Sales, Solutions Architecture & Deal Strategy"
     }
     res = requests.post(f"{BASE_URL}/generate-question", json=payload)
     data = res.json()

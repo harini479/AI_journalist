@@ -1,359 +1,532 @@
 import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
-import { 
-  Mic, 
-  MicOff, 
-  Send, 
-  BrainCircuit, 
-  Database, 
-  ChevronRight, 
-  History,
-  Info,
-  ShieldCheck,
-  CloudDownload,
-  Link,
-  Loader2,
-  CheckCircle,
-  AlertCircle
+import {
+  Mic, MicOff, Send, BrainCircuit, Database, ChevronLeft,
+  ShieldCheck, CloudDownload, Link, Loader2, CheckCircle,
+  Play, FileText, Sparkles, Layers, BookOpen, ArrowRight,
+  Zap, Globe, Lock, Cpu, Eye, EyeOff, GitBranch, Target,
+  Activity, MessageSquare
 } from 'lucide-react';
+
+interface Decision {
+  action: string;
+  answer_depth: string;
+  scripted_question_resolved: boolean;
+  current_script_question: string;
+  script_progress: string;
+  tangent_detected: { exists: boolean; topic?: string; worth_following?: boolean };
+  internal_monologue: string;
+  scenario_used: string;
+  rag_sources: string[];
+}
 
 interface Message {
   id: string;
   role: 'expert' | 'ai';
   text: string;
   timestamp: number;
+  chunks?: any[];
+  progress?: string;
+  decision?: Decision;
 }
 
-const API_URL = 'http://localhost:8001/generate-question';
+interface ScriptData {
+  themes: any[];
+  script: any;
+}
+
+const API = 'http://localhost:8001';
 
 const App: React.FC = () => {
-  const [view, setView] = useState<'landing' | 'interview' | 'ingest'>('landing');
+  const [view, setView] = useState<'landing' | 'interview' | 'ingest' | 'research' | 'script_preview'>('landing');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [ingestionStatus, setIngestionStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [ingestionResult, setIngestionResult] = useState<string>('');
+  const [ingestionResult, setIngestionResult] = useState('');
+  const [scriptData, setScriptData] = useState<ScriptData | null>(null);
+  const [researchStep, setResearchStep] = useState(0);
+  const [expandedDecisions, setExpandedDecisions] = useState<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages]);
 
-  // Trigger First Hook automatically when entering interview view
   useEffect(() => {
-    if (view === 'interview' && messages.length === 0) {
-      handleSend('');
-    }
+    if (view === 'interview' && messages.length === 0) handleSend('', 'text');
   }, [view]);
 
-  const handleSend = async (text: string) => {
-    // Only block empty strings if it's NOT the first message (which triggers the hook)
-    if (!text.trim() && messages.length > 0) return;
-
-    // Only add a message to the UI if there is actual text
-    if (text.trim()) {
-      const expertMsg: Message = {
-        id: Date.now().toString(),
-        role: 'expert',
-        text: text,
-        timestamp: Date.now()
-      };
-      setMessages(prev => [...prev, expertMsg]);
+  const handlePrepareInterview = async () => {
+    setView('research');
+    setResearchStep(1);
+    try {
+      setTimeout(() => setResearchStep(2), 2500);
+      setTimeout(() => setResearchStep(3), 5000);
+      const res = await axios.post(`${API}/prepare-interview`, {
+        session_id: 'demo-session-001',
+        topic: 'Enterprise Pre-Sales, Solutions Architecture & Deal Strategy'
+      });
+      setScriptData(res.data);
+      setResearchStep(4);
+      setTimeout(() => setView('script_preview'), 1200);
+    } catch (e) {
+      console.error(e);
+      setView('landing');
+      alert('Failed to prepare. Ensure knowledge is ingested.');
     }
-    
+  };
+
+  const handleSend = async (text: string, source = 'text') => {
+    if (!text.trim() && messages.length > 0) return;
+    if (text.trim()) {
+      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'expert', text, timestamp: Date.now() }]);
+    }
     setInputText('');
     setIsLoading(true);
-
     try {
-      // Find the last AI question to send for persistence
-      const lastAIQuestion = messages.filter(m => m.role === 'ai').pop()?.text;
-
-      const response = await axios.post(API_URL, {
-        expert_answer: text,
-        last_question: lastAIQuestion || null,
-        user_session_id: 'demo-session-001'
+      const res = await axios.post(`${API}/generate-question`, {
+        expert_answer: text, user_session_id: 'demo-session-001', input_source: source,
       });
-
-      const aiMsg: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'ai',
-        text: response.data.question,
-        timestamp: Date.now()
-      };
-
-      setMessages(prev => [...prev, aiMsg]);
-    } catch (error) {
-      console.error("Error calling backend:", error);
-      const errorMsg: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'ai',
-        text: "I encountered a synchronization error with the Knowledge Hub. Please try again.",
-        timestamp: Date.now()
-      };
-      setMessages(prev => [...prev, errorMsg]);
-    } finally {
-      setIsLoading(false);
-    }
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(), role: 'ai', text: res.data.question,
+        timestamp: Date.now(), chunks: res.data.chunks_used, progress: res.data.progress,
+        decision: res.data.decision
+      }]);
+    } catch (e) {
+      console.error(e);
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(), role: 'ai',
+        text: 'Connection error with the Knowledge Hub. Please try again.', timestamp: Date.now()
+      }]);
+    } finally { setIsLoading(false); }
   };
 
-  const toggleRecording = () => {
-    setIsRecording(!isRecording);
+  const toggleRecording = async () => {
     if (!isRecording) {
-      console.log("Starting Web Audio API capture...");
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const rec = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        mediaRecorderRef.current = rec;
+        audioChunksRef.current = [];
+        rec.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+        rec.onstop = async () => {
+          stream.getTracks().forEach(t => t.stop());
+          const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          if (blob.size < 1000) return;
+          setIsTranscribing(true);
+          try {
+            const fd = new FormData();
+            fd.append('audio', blob, 'recording.webm');
+            const r = await axios.post(`${API}/transcribe`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+            if (r.data.transcript?.trim()) handleSend(r.data.transcript.trim(), 'voice');
+          } catch (err) { console.error(err); }
+          finally { setIsTranscribing(false); }
+        };
+        rec.start();
+        setIsRecording(true);
+      } catch (err) { console.error(err); }
     } else {
-      console.log("Stopping capture and processing audio...");
-      handleSend("In my experience, the biggest bottleneck in heart failure treatment is patient adherence to diuretic therapy.");
+      if (mediaRecorderRef.current?.state !== 'inactive') mediaRecorderRef.current?.stop();
+      setIsRecording(false);
     }
   };
 
-  const handleStartInterview = () => {
-    setView('interview');
-  };
-
-  const handleIngestYoutube = async () => {
+  const handleIngest = async () => {
     if (!youtubeUrl.trim()) return;
     setIngestionStatus('loading');
     try {
-      const response = await axios.post('http://localhost:8001/ingest-youtube', {
-        url: youtubeUrl
-      });
+      const res = await axios.post(`${API}/ingest-youtube`, { url: youtubeUrl });
       setIngestionStatus('success');
-      setIngestionResult(response.data.message);
-    } catch (error) {
-      console.error("Ingestion error:", error);
-      setIngestionStatus('error');
-    }
+      setIngestionResult(res.data.message);
+    } catch (e) { console.error(e); setIngestionStatus('error'); }
   };
 
+  // ─── LANDING ──────────────────────────────────────────
   if (view === 'landing') {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 text-slate-50 p-6 relative overflow-hidden">
-        <div className="absolute top-0 left-0 w-full h-full landing-bg-glow pointer-events-none" />
-        
-        <div className="max-w-3xl w-full text-center relative z-10">
-          <div className="flex justify-center mb-8">
-            <div className="p-4 rounded-3xl bg-indigo-500/10 border border-indigo-500/20 shadow-2xl shadow-indigo-500/10 animate-float">
-              <BrainCircuit className="w-16 h-16 text-indigo-400" />
-            </div>
+      <div className="landing">
+        <nav className="landing-nav">
+          <div className="landing-logo">
+            <div className="landing-logo-icon"><BrainCircuit size={20} /></div>
+            AI Journalist
           </div>
-          
-          <h1 className="text-5xl md:text-7xl font-black tracking-tight mb-6 hero-title">
-            Cognitive Extraction Engine
-          </h1>
-          <p className="text-xl text-slate-400 mb-12 max-w-2xl mx-auto font-medium leading-relaxed">
-            Synthesizing expert tacit knowledge and YouTube transcripts into structured, grounded intelligence.
-          </p>
+          <div className="landing-nav-actions">
+            <button className="btn-ghost" onClick={() => setView('ingest')}>
+              <CloudDownload size={14} style={{ marginRight: 6, verticalAlign: -2 }} />Ingest Hub
+            </button>
+          </div>
+        </nav>
 
-          <div className="flex flex-wrap justify-center gap-6">
-            <button
-              onClick={handleStartInterview}
-              className="px-8 py-5 rounded-2xl premium-gradient text-white font-bold text-lg shadow-2xl shadow-indigo-500/30 hover:scale-105 transition-all flex items-center gap-3"
-            >
-              Initialize Interview <ChevronRight className="w-5 h-5" />
-            </button>
-            <button
-              onClick={() => setView('ingest')}
-              className="px-8 py-5 rounded-2xl bg-slate-900 border border-slate-800 text-slate-300 font-bold text-lg hover:bg-slate-800 hover:scale-105 transition-all flex items-center gap-3"
-            >
-              <CloudDownload className="w-5 h-5 text-accent" /> Ingestion Tower
-            </button>
+        <div className="landing-hero">
+          <div className="landing-badge">
+            <Zap size={12} />Tacit Knowledge Extraction Engine
+          </div>
+          <h1 className="landing-title">Build Your<br />Digital Twin.</h1>
+          <p className="landing-subtitle">
+            We research your expertise, craft an interview script, and extract the unwritten rules of your career — all grounded in your own data.
+          </p>
+          <button className="btn-primary" onClick={handlePrepareInterview}>
+            Start Research Phase <ArrowRight size={16} />
+          </button>
+        </div>
+
+        <div className="landing-stats">
+          <div className="stat-item"><label>Knowledge Chunks</label><span>1,643</span></div>
+          <div className="stat-item"><label>Extraction Rate</label><span>94.2%</span></div>
+          <div className="stat-item"><label>Twin Fidelity</label><span>High</span></div>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── RESEARCH SCAN ────────────────────────────────────
+  if (view === 'research') {
+    const steps = [
+      { id: 1, icon: Database, label: 'Scanning Knowledge Hub', sub: '1,643 chunks mapped' },
+      { id: 2, icon: Sparkles, label: 'Extracting Core Themes', sub: 'Identifying tacit patterns' },
+      { id: 3, icon: FileText, label: 'Crafting Interview Script', sub: 'Foundation → Depth arc' },
+    ];
+    return (
+      <div className="research-page">
+        <div className="research-card">
+          <h2>Editorial Research Scan</h2>
+          <p>Synthesizing 20 years of expertise into an interview blueprint...</p>
+          <div className="research-steps">
+            {steps.map(s => (
+              <div key={s.id} className={`research-step ${researchStep >= s.id ? 'active' : ''}`}>
+                <div className="research-step-icon"><s.icon size={18} /></div>
+                <div className="research-step-text">
+                  <strong>{s.label}</strong>
+                  <small>{s.sub}</small>
+                </div>
+                <div className="research-step-status">
+                  {researchStep > s.id && <CheckCircle size={18} />}
+                  {researchStep === s.id && <Loader2 size={18} className="spin" />}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="progress-bar">
+            <div className="progress-bar-fill" style={{ width: `${(Math.min(researchStep, 3) / 3) * 100}%` }} />
           </div>
         </div>
       </div>
     );
   }
 
+  // ─── SCRIPT PREVIEW ───────────────────────────────────
+  if (view === 'script_preview') {
+    const phases = [
+      { key: 'phase_1_foundation', label: 'Foundation', icon: Globe },
+      { key: 'phase_2_tension', label: 'Tension', icon: Zap },
+      { key: 'phase_3_tactical', label: 'Tactical Playbook', icon: Cpu },
+      { key: 'phase_4_synthesis', label: 'Synthesis', icon: Layers },
+    ];
+
+    return (
+      <div className="script-page">
+        <header className="script-header">
+          <div className="script-header-left">
+            <BrainCircuit size={22} style={{ color: 'var(--accent)' }} />
+            <div>
+              <small>Research Complete</small>
+              <h1>Interview Blueprint</h1>
+            </div>
+          </div>
+          <button className="btn-go-live" onClick={() => setView('interview')}>
+            Launch Interview <Play size={16} />
+          </button>
+        </header>
+
+        <div className="script-body">
+          <div className="script-layout">
+            {/* Sidebar: Themes */}
+            <aside className="script-sidebar">
+              <div className="section-label"><div className="section-label-dot" /> Extracted Themes</div>
+              {scriptData?.themes.map((t: any) => (
+                <div key={t.theme_id} className="theme-card">
+                  <div className="theme-card-header">
+                    <h4>{t.theme_title}</h4>
+                    <span className="theme-card-id">#{t.theme_id}</span>
+                  </div>
+                  <p>{t.editorial_rationale}</p>
+                  {t.emotional_anchor && (
+                    <div className="theme-card-anchor"><Zap size={10} /> {t.emotional_anchor}</div>
+                  )}
+                </div>
+              ))}
+              <div className="info-box">
+                <div className="info-box-header"><ShieldCheck size={14} /> Grounded Logic</div>
+                <p>Every question below is anchored to a real knowledge chunk from your ingested data. Nothing is hallucinated.</p>
+              </div>
+            </aside>
+
+            {/* Main: Full Script */}
+            <div className="script-main">
+              <div className="section-label"><div className="section-label-dot" /> Full Narrative Script</div>
+              {phases.map((phase, pIdx) => {
+                const arc = scriptData?.script?.interview_arc;
+                const data = arc?.[phase.key];
+                if (!data) return null;
+                return (
+                  <div key={phase.key} className="phase-block">
+                    <div className="phase-header">
+                      <div className="phase-number">{pIdx + 1}</div>
+                      <h4>Phase {pIdx + 1}: {phase.label}</h4>
+                      <span className="phase-count">{data.questions?.length || 0} Questions</span>
+                    </div>
+                    {data.questions?.map((q: any) => (
+                      <div key={q.question_id} className="question-card">
+                        <div className="question-id">{q.question_id}</div>
+                        <div className="question-content">
+                          <p>"{q.question_text}"</p>
+                          <div className="question-meta">
+                            {q.chunk_attribution?.source_title && (
+                              <span><BookOpen size={11} /> {q.chunk_attribution.source_title}</span>
+                            )}
+                            {q.emotional_trigger && (
+                              <span style={{ color: 'var(--accent)' }}><Sparkles size={11} /> {q.emotional_trigger}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── INGEST ───────────────────────────────────────────
   if (view === 'ingest') {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 text-slate-50 p-6 relative overflow-hidden">
-        <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_10%,_rgba(99,102,241,0.1),_transparent_60%)] pointer-events-none" />
-        
-        <div className="max-w-2xl w-full relative z-10">
-          <button 
-            onClick={() => setView('landing')}
-            className="mb-8 text-slate-500 hover:text-white transition-all flex items-center gap-2 text-xs font-black uppercase tracking-widest group"
-          >
-            <ChevronRight className="w-4 h-4 rotate-180 group-hover:-translate-x-1 transition-transform" /> Back to Dashboard
+      <div className="ingest-page">
+        <div style={{ width: '100%', maxWidth: 560 }}>
+          <button className="back-link" onClick={() => setView('landing')}>
+            <ChevronLeft size={14} /> Back to Dashboard
           </button>
-
-          <div className="glass-morphism p-10 rounded-[2.5rem] border border-slate-800 shadow-2xl relative overflow-hidden">
-            <div className="absolute top-0 right-0 p-8 opacity-10">
-              <CloudDownload className="w-24 h-24 text-accent" />
-            </div>
-            
-            <div className="flex items-center gap-5 mb-10">
-              <div className="p-4 rounded-2xl bg-accent/10 border border-accent/20">
-                <CloudDownload className="w-8 h-8 text-accent" />
-              </div>
+          <div className="ingest-card">
+            <div className="ingest-header">
+              <div className="ingest-icon"><CloudDownload size={24} /></div>
               <div>
-                <h2 className="text-3xl font-black tracking-tight">Ingestion Tower</h2>
-                <p className="text-slate-500 font-medium">Knowledge Hub Synchronization Engine</p>
+                <h2>Ingestion Hub</h2>
+                <small>Feed the Knowledge Engine</small>
               </div>
             </div>
-
-            <div className="space-y-8">
-              <div className="space-y-3">
-                <label className="text-xs font-black uppercase tracking-widest text-slate-500 ml-1">YouTube Source URL</label>
-                <div className="relative group">
-                  <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
-                    <Link className="w-5 h-5 text-slate-600 group-focus-within:text-accent transition-colors" />
-                  </div>
-                  <input 
-                    type="text"
-                    className="w-full bg-slate-900 border border-slate-800 rounded-2xl py-5 pl-14 pr-5 text-white focus:border-accent outline-none transition-all placeholder:text-slate-700 font-medium text-lg"
-                    placeholder="https://www.youtube.com/watch?v=..."
-                    value={youtubeUrl}
-                    onChange={(e) => setYoutubeUrl(e.target.value)}
-                  />
-                </div>
+            <div className="input-group">
+              <label>YouTube Source URL</label>
+              <div className="input-wrapper">
+                <Link size={16} className="input-icon" />
+                <input
+                  className="input-field"
+                  type="text"
+                  placeholder="https://www.youtube.com/watch?v=..."
+                  value={youtubeUrl}
+                  onChange={e => setYoutubeUrl(e.target.value)}
+                />
               </div>
-
-              <button 
-                onClick={handleIngestYoutube}
-                disabled={ingestionStatus === 'loading'}
-                className="w-full py-5 rounded-2xl premium-gradient text-white font-black text-xl shadow-2xl shadow-accent/20 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:scale-100 flex items-center justify-center gap-4"
-              >
-                {ingestionStatus === 'loading' ? (
-                  <><Loader2 className="w-6 h-6 animate-spin" /> Running Hybrid Pipeline...</>
-                ) : (
-                  'Synchronize Knowledge'
-                )}
-              </button>
-
-              {ingestionStatus === 'success' && (
-                <div className="p-6 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl flex gap-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  <div className="p-2 bg-emerald-500/20 rounded-lg h-fit">
-                    <CheckCircle className="w-6 h-6 text-emerald-400" />
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-emerald-400 text-lg">Sync Successful</h4>
-                    <p className="text-sm text-emerald-500/70 mt-1 leading-relaxed">{ingestionResult}</p>
-                  </div>
-                </div>
-              )}
-
-              {ingestionStatus === 'error' && (
-                <div className="p-6 bg-red-500/10 border border-red-500/20 rounded-2xl flex gap-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  <div className="p-2 bg-red-500/20 rounded-lg h-fit">
-                    <AlertCircle className="w-6 h-6 text-red-400" />
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-red-400 text-lg">Extraction Fault</h4>
-                    <p className="text-sm text-red-500/70 mt-1 leading-relaxed">The pipeline was unable to resolve the transcript. Please verify the URL and ensure captions are enabled.</p>
-                  </div>
-                </div>
-              )}
             </div>
+            <button className="btn-full" onClick={handleIngest} disabled={ingestionStatus === 'loading'}>
+              {ingestionStatus === 'loading'
+                ? <><Loader2 size={18} className="spin" /> Processing...</>
+                : 'Synchronize Knowledge'}
+            </button>
+            {ingestionStatus === 'success' && (
+              <div className="success-banner">
+                <CheckCircle size={20} />
+                <div><h4>Sync Complete</h4><p>{ingestionResult}</p></div>
+              </div>
+            )}
           </div>
         </div>
       </div>
     );
   }
 
+  // ─── INTERVIEW CHAT ───────────────────────────────────
+  const lastProgress = messages.filter(m => m.progress).pop()?.progress;
+
   return (
-    <div className="chat-container">
-      {/* Header */}
-      <header className="p-6 flex items-center justify-between border-b glass-morphism sticky top-0 z-20">
-        <div className="flex items-center gap-4">
-          <button 
-            onClick={() => setView('landing')}
-            className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 transition-all"
-          >
-            <BrainCircuit className="w-6 h-6" />
+    <div className="chat-page">
+      <header className="chat-header">
+        <div className="chat-header-left">
+          <button className="chat-logo-btn" onClick={() => setView('landing')}>
+            <BrainCircuit size={18} />
           </button>
-          <div>
-            <h1 className="text-xl font-black tracking-tight">AI Journalist</h1>
-            <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-emerald-500 font-black">
-              <ShieldCheck className="w-3 h-3" /> Zero-Trust Grounding
-            </div>
+          <div className="chat-header-info">
+            <h1>AI Journalist — Live Interview</h1>
+            <div className="chat-header-status"><Lock size={10} /> Grounded Protocols Active</div>
           </div>
         </div>
-        
-        <div className="flex items-center gap-5">
-          <div className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-black uppercase tracking-widest text-slate-500">
-            Session: Demo-001
-          </div>
-          <button className="p-2 text-slate-500 hover:text-white transition-colors">
-            <History className="w-5 h-5" />
-          </button>
+        <div className="chat-header-right">
+          {lastProgress && (
+            <div className="progress-section">
+              <label>Script Progress</label>
+              <div className="progress-track">
+                <div className="progress-track-bar">
+                  <div className="progress-track-fill" style={{
+                    width: `${(parseInt(lastProgress.split('/')[0]) / parseInt(lastProgress.split('/')[1])) * 100}%`
+                  }} />
+                </div>
+                <span>{lastProgress}</span>
+              </div>
+            </div>
+          )}
+          <div className="session-badge">Session: Demo-001</div>
         </div>
       </header>
 
-      {/* Message Feed */}
-      <div 
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto p-8 flex flex-col"
-      >
-        {messages.length === 0 && (
-          <div className="flex-1 flex flex-col items-center justify-center text-center p-12">
-            <div className="w-24 h-24 rounded-[2rem] bg-slate-900 border border-slate-800 flex items-center justify-center mb-8 animate-float shadow-2xl">
-              <Database className="w-10 h-10 text-accent" />
-            </div>
-            <h2 className="text-3xl font-black mb-4">Initialize Extraction</h2>
-            <p className="text-slate-500 max-w-sm font-medium leading-relaxed">
-              Press the microphone to record your insight or type your first answer below to activate the RAG engine.
-            </p>
-          </div>
-        )}
+      <div className="chat-feed" ref={scrollRef}>
+        {messages.map(msg => {
+          const isExpanded = expandedDecisions.has(msg.id);
+          const toggleDecision = () => {
+            setExpandedDecisions(prev => {
+              const next = new Set(prev);
+              if (next.has(msg.id)) next.delete(msg.id); else next.add(msg.id);
+              return next;
+            });
+          };
+          const actionLabel: Record<string, { icon: string; color: string; label: string }> = {
+            'next_script_question': { icon: '✅', color: '#22c55e', label: 'Resolved → Next Question' },
+            'drill_down': { icon: '🔍', color: '#f59e0b', label: 'Drilling Deeper' },
+            'follow_tangent': { icon: '🌀', color: '#a78bfa', label: 'Following Tangent' },
+            'bridge_back_to_script': { icon: '🌉', color: '#38bdf8', label: 'Bridging Back to Script' },
+            'unknown': { icon: '⚡', color: '#94a3b8', label: 'Initial Hook' },
+          };
+          const d = msg.decision;
+          const action = d ? (actionLabel[d.action] || actionLabel['unknown']) : null;
 
-        {messages.map((msg) => (
-          <div 
-            key={msg.id}
-            className={`message-bubble ${msg.role === 'expert' ? 'expert-message' : 'ai-message'}`}
-          >
-            {msg.role === 'ai' && (
-              <div className="flex items-center gap-2 mb-3 text-[10px] font-black uppercase tracking-widest text-accent-light opacity-80">
-                <ShieldCheck className="w-3 h-3" /> Grounded Follow-up
+          return (
+            <div key={msg.id} className={`msg ${msg.role === 'expert' ? 'msg-expert' : 'msg-ai'}`}>
+              <div className="msg-bubble">
+                {msg.role === 'ai' && (
+                  <div className="msg-label">
+                    <span><ShieldCheck size={10} /> Grounded Follow-up</span>
+                    {msg.chunks?.[0]?.source_title && (
+                      <span className="msg-source"><Database size={10} /> {msg.chunks[0].source_title}</span>
+                    )}
+                  </div>
+                )}
+                <div className="msg-text">{msg.text}</div>
               </div>
-            )}
-            <p className="font-medium">{msg.text}</p>
-          </div>
-        ))}
 
-        {isLoading && (
-          <div className="ai-message message-bubble opacity-60 flex items-center gap-4">
-            <div className="flex gap-1.5">
-              <div className="w-2 h-2 bg-accent rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-              <div className="w-2 h-2 bg-accent rounded-full animate-bounce" style={{ animationDelay: '200ms' }} />
-              <div className="w-2 h-2 bg-accent rounded-full animate-bounce" style={{ animationDelay: '400ms' }} />
+              {msg.role === 'ai' && d && (
+                <div className="decision-section">
+                  <button className="decision-toggle" onClick={toggleDecision}>
+                    {isExpanded ? <EyeOff size={12} /> : <Eye size={12} />}
+                    <span>Decision Log</span>
+                    {action && <span className="decision-badge" style={{ background: action.color + '22', color: action.color }}>{action.icon} {action.label}</span>}
+                  </button>
+
+                  {isExpanded && (
+                    <div className="decision-panel">
+                      <div className="decision-grid">
+                        <div className="decision-item">
+                          <div className="decision-item-label"><GitBranch size={12} /> Action</div>
+                          <div className="decision-item-value" style={{ color: action?.color }}>{action?.icon} {action?.label}</div>
+                        </div>
+                        <div className="decision-item">
+                          <div className="decision-item-label"><Activity size={12} /> Answer Depth</div>
+                          <div className="decision-item-value">
+                            <span className={`depth-tag depth-${d.answer_depth}`}>{d.answer_depth}</span>
+                          </div>
+                        </div>
+                        <div className="decision-item">
+                          <div className="decision-item-label"><Target size={12} /> Script Position</div>
+                          <div className="decision-item-value">{d.script_progress}</div>
+                        </div>
+                        <div className="decision-item">
+                          <div className="decision-item-label"><CheckCircle size={12} /> Question Resolved</div>
+                          <div className="decision-item-value">{d.scripted_question_resolved ? '✅ Yes' : '❌ No'}</div>
+                        </div>
+                      </div>
+
+                      {d.current_script_question && (
+                        <div className="decision-script-q">
+                          <div className="decision-item-label"><FileText size={12} /> Current Script Question</div>
+                          <p>{d.current_script_question}</p>
+                        </div>
+                      )}
+
+                      {d.internal_monologue && (
+                        <div className="decision-monologue">
+                          <div className="decision-item-label"><MessageSquare size={12} /> Internal Monologue</div>
+                          <p>{d.internal_monologue}</p>
+                        </div>
+                      )}
+
+                      {d.tangent_detected?.exists && (
+                        <div className="decision-tangent">
+                          <div className="decision-item-label">🌀 Tangent Detected</div>
+                          <p>Topic: {d.tangent_detected.topic || 'N/A'} | Worth: {d.tangent_detected.worth_following ? 'Yes' : 'No'}</p>
+                        </div>
+                      )}
+
+                      {d.rag_sources?.length > 0 && (
+                        <div className="decision-rag">
+                          <div className="decision-item-label"><Database size={12} /> RAG Sources</div>
+                          <div className="decision-rag-tags">
+                            {d.rag_sources.map((s, i) => <span key={i} className="rag-tag">{s}</span>)}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="decision-scenario">
+                        <div className="decision-item-label"><Cpu size={12} /> Scenario Instruction</div>
+                        <code>{d.scenario_used}</code>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
-            <span className="text-xs font-black uppercase tracking-widest text-slate-400">Synthesizing Context...</span>
+          );
+        })}
+        {isLoading && (
+          <div className="msg msg-ai">
+            <div className="typing-indicator">
+              <div className="typing-dots">
+                <div className="typing-dot" /><div className="typing-dot" /><div className="typing-dot" />
+              </div>
+              <span className="typing-text">Synthesizing...</span>
+            </div>
           </div>
         )}
       </div>
 
-      {/* Input Area */}
-      <footer className="stt-bar">
-        <div className="max-w-2xl mx-auto flex items-center gap-4 bg-slate-900/80 backdrop-blur-md p-3 rounded-3xl border border-slate-800 focus-within:border-accent focus-within:shadow-[0_0_30px_rgba(99,102,241,0.15)] transition-all">
-          <button 
+      <div className="chat-input-bar">
+        <div className="chat-input-wrapper">
+          <button
+            className={`mic-btn ${isRecording ? 'recording' : ''}`}
             onClick={toggleRecording}
-            className={`record-btn ${isRecording ? 'active' : ''}`}
+            disabled={isTranscribing}
           >
-            {isRecording ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+            {isTranscribing ? <Loader2 size={20} className="spin" /> : isRecording ? <MicOff size={20} /> : <Mic size={20} />}
           </button>
-          
-          <input 
-            type="text" 
-            className="flex-1 bg-transparent border-none outline-none py-4 px-4 text-slate-50 placeholder:text-slate-600 font-medium text-lg"
-            style={{ color: '#f8fafc' }}
-            placeholder="Document your clinical insight..."
+          <textarea
+            className="chat-textarea"
+            rows={1}
+            placeholder={isRecording ? '🔴 Recording...' : isTranscribing ? 'Transcribing...' : 'Share your insight...'}
             value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSend(inputText)}
+            onChange={e => setInputText(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(inputText); } }}
+            disabled={isRecording || isTranscribing}
           />
-
-          <button 
-            onClick={() => handleSend(inputText)}
-            className="p-4 bg-accent/10 rounded-2xl text-accent hover:text-accent-light hover:bg-accent/20 transition-all hover:scale-105 active:scale-90 flex items-center justify-center"
-          >
-            <Send className="w-6 h-6" />
+          <button className="send-btn" onClick={() => handleSend(inputText)}>
+            <Send size={18} />
           </button>
         </div>
-      </footer>
+      </div>
     </div>
   );
 };

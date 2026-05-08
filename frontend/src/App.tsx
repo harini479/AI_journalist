@@ -3,7 +3,7 @@ import axios from 'axios';
 import { 
   Mic, MicOff, Send, BrainCircuit, ChevronRight, History, ShieldCheck, 
   CloudDownload, Link, Loader2, CheckCircle, Terminal, Activity, 
-  FileText, Map, Compass, Play, BookOpen, Sparkles, Layers, Globe, Cpu, Eye, EyeOff
+  FileText, Map, Compass, Play, BookOpen, Sparkles, Layers, Globe, Cpu, Eye, EyeOff, Database, GitBranch, Target, MessageSquare
 } from 'lucide-react';
 
 interface Decision {
@@ -57,12 +57,49 @@ const App: React.FC = () => {
   const [script, setScript] = useState<InterviewScript | null>(null);
   const [themes, setThemes] = useState<any[]>([]);
   const [openDecisionId, setOpenDecisionId] = useState<string | null>(null);
+  const [expandedThemes, setExpandedThemes] = useState<Set<number>>(new Set());
+  const [expandedQuestions, setExpandedQuestions] = useState<Set<string>>(new Set());
+  const [showFramework, setShowFramework] = useState(false);
   const [scriptProgress, setScriptProgress] = useState<string>('0/0');
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const sessionId = 'demo-session-002';
+  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
+
+  const resetSession = () => {
+    const newId = crypto.randomUUID();
+    setSessionId(newId);
+    setMessages([]);
+    setScript(null);
+    setThemes([]);
+    setScriptProgress('0/0');
+    setShowFramework(false);
+    setExpandedThemes(new Set());
+    setExpandedQuestions(new Set());
+    setOpenDecisionId(null);
+    setView('landing');
+  };
+
+  const downloadTranscript = () => {
+    const header = `=== AI JOURNALIST — INTERVIEW TRANSCRIPT ===\nSession ID: ${sessionId}\nDate: ${new Date().toISOString().split('T')[0]}\nProgress: ${scriptProgress}\n${'='.repeat(50)}\n\n`;
+    const body = messages.map((msg, i) => {
+      const role = msg.role === 'expert' ? 'EXPERT' : 'AI JOURNALIST';
+      const time = new Date(msg.timestamp).toLocaleTimeString();
+      let entry = `[${time}] ${role}:\n${msg.text}\n`;
+      if (msg.decision?.internal_monologue) {
+        entry += `  >> Decision: ${msg.decision.internal_monologue}\n`;
+      }
+      return entry;
+    }).join('\n---\n\n');
+    const blob = new Blob([header + body], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `interview_${sessionId.slice(0, 8)}_${new Date().toISOString().split('T')[0]}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -169,6 +206,7 @@ const App: React.FC = () => {
             AI Journalist
           </div>
           <button className="btn-ghost" onClick={() => setView('ingest')}>Ingest Hub</button>
+          <button className="btn-ghost" onClick={resetSession}>+ New Session</button>
         </nav>
         <div className="landing-hero">
           <div className="landing-badge"><Sparkles size={12} /> Extraction Engine Active</div>
@@ -210,6 +248,25 @@ const App: React.FC = () => {
   }
 
   if (view === 'script_preview') {
+    const toggleTheme = (id: number) => {
+      setExpandedThemes(prev => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+      });
+    };
+    const toggleQuestion = (id: string) => {
+      setExpandedQuestions(prev => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+      });
+    };
+
+    const totalQuestions = Object.values(script?.interview_arc || {}).reduce(
+      (sum: number, phase: any) => sum + (phase.questions?.length || 0), 0
+    );
+
     return (
       <div className="script-page">
         <header className="script-header">
@@ -217,30 +274,150 @@ const App: React.FC = () => {
             <BrainCircuit size={22} style={{ color: 'var(--accent)' }} />
             <div><small>Research Complete</small><h1>Interview Blueprint</h1></div>
           </div>
-          <button className="btn-go-live" onClick={() => setView('interview')}>Launch Interview <Play size={16} /></button>
+          <div style={{display:'flex',gap:10,alignItems:'center'}}>
+            <button className="btn-ghost" onClick={() => setShowFramework(!showFramework)}>
+              <Cpu size={14} style={{marginRight:4,verticalAlign:-2}}/>{showFramework ? 'Hide' : 'Show'} Framework
+            </button>
+            <button className="btn-go-live" onClick={() => setView('interview')}>
+              {messages.length > 0 ? 'Return to Interview' : 'Launch Interview'} <Play size={16} />
+            </button>
+          </div>
         </header>
+
+        {showFramework && (
+          <div className="framework-banner">
+            <h3><Cpu size={16} /> Script Generation Framework</h3>
+            <div className="framework-stages">
+              <div className="framework-stage">
+                <div className="framework-stage-num">1</div>
+                <div><strong>Research Scan</strong><p>Sampled 3 chunks per source (start, middle, end) across all knowledge sources → ~33 representative chunks</p></div>
+              </div>
+              <div className="framework-stage">
+                <div className="framework-stage-num">2</div>
+                <div><strong>Theme Extraction (LLM Call #1)</strong><p>Identified {themes.length} editorially compelling themes, each with emotional anchors and source evidence</p></div>
+              </div>
+              <div className="framework-stage">
+                <div className="framework-stage-num">3</div>
+                <div><strong>Script Crafting (LLM Call #2)</strong><p>Generated {totalQuestions} questions across 4 phases. Each question is grounded in a specific knowledge chunk with editorial reasoning.</p></div>
+              </div>
+            </div>
+            <div className="framework-decision">
+              <Activity size={14} /> <strong>Why this count?</strong> Each question targets ~3 min of conversation. {totalQuestions} × 3 = {totalQuestions * 3} min — optimal extraction window before expert fatigue.
+            </div>
+          </div>
+        )}
+
         <div className="script-body">
           <div className="script-layout">
             <aside className="script-sidebar">
-              <div className="section-label"><div className="section-label-dot" /> Extracted Themes</div>
-              {themes.map((t: any) => (
-                <div key={t.theme_id} className="theme-card">
-                  <h4>{t.theme_title}</h4>
-                  <p>{t.editorial_rationale}</p>
-                </div>
-              ))}
+              <div className="section-label"><div className="section-label-dot" /> Extracted Themes ({themes.length})</div>
+              {themes.map((t: any) => {
+                const isOpen = expandedThemes.has(t.theme_id);
+                return (
+                  <div key={t.theme_id} className={`theme-card ${isOpen ? 'theme-expanded' : ''}`}>
+                    <h4>{t.theme_title}</h4>
+                    <p>{t.editorial_rationale}</p>
+                    <button className="theme-toggle" onClick={() => toggleTheme(t.theme_id)}>
+                      <Eye size={11} /> {isOpen ? 'Hide' : 'Show'} Reasoning
+                    </button>
+                    {isOpen && (
+                      <div className="theme-details">
+                        {t.emotional_anchor && (
+                          <div className="theme-detail-row">
+                            <span className="theme-detail-label"><Target size={11} /> Emotional Anchor</span>
+                            <span>{t.emotional_anchor}</span>
+                          </div>
+                        )}
+                        {t.never_asked_angle && (
+                          <div className="theme-detail-row">
+                            <span className="theme-detail-label"><Sparkles size={11} /> Never-Asked Angle</span>
+                            <span>{t.never_asked_angle}</span>
+                          </div>
+                        )}
+                        {t.source_evidence?.length > 0 && (
+                          <div className="theme-detail-row">
+                            <span className="theme-detail-label"><Database size={11} /> Source Evidence</span>
+                            <div className="theme-evidence-list">
+                              {t.source_evidence.map((s: any, i: number) => (
+                                <div key={i} className="evidence-chip">
+                                  <strong>{s.source_title}</strong>
+                                  <small>{s.chunk_preview}</small>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </aside>
             <div className="script-main">
-              <div className="section-label"><div className="section-label-dot" /> Full Narrative Script</div>
+              <div className="section-label"><div className="section-label-dot" /> Full Narrative Script ({totalQuestions} questions)</div>
               {Object.entries(script?.interview_arc || {}).map(([key, phase]: [string, any]) => (
                 <div key={key} className="phase-block">
-                  <div className="phase-header"><h4>{key.replace('phase_', '').replace('_', ' ')}</h4></div>
-                  {phase.questions.map((q: any) => (
-                    <div key={q.question_id} className="question-card">
-                      <div className="question-id">{q.question_id}</div>
-                      <div className="question-content"><p>"{q.question_text}"</p></div>
-                    </div>
-                  ))}
+                  <div className="phase-header">
+                    <h4>{key.replace('phase_', '').replace(/_/g, ' ')}</h4>
+                    {phase.phase_goal && <small>{phase.phase_goal}</small>}
+                  </div>
+                  {phase.questions?.map((q: any) => {
+                    const qId = q.question_id || `q-${Math.random()}`;
+                    const isQOpen = expandedQuestions.has(qId);
+                    return (
+                      <div key={qId} className={`question-card ${isQOpen ? 'question-expanded' : ''}`}>
+                        <div className="question-top-row">
+                          <div className="question-id">{q.question_id}</div>
+                          <div className="question-content"><p>"{q.question_text}"</p></div>
+                        </div>
+                        <button className="question-rationale-btn" onClick={() => toggleQuestion(qId)}>
+                          <Eye size={11} /> {isQOpen ? 'Hide' : 'Why this question?'}
+                        </button>
+                        {isQOpen && (
+                          <div className="question-rationale-panel">
+                            {q.emotional_trigger && (
+                              <div className="qr-item">
+                                <span className="qr-label"><Target size={11} /> Emotional Trigger</span>
+                                <span className="qr-value">{q.emotional_trigger}</span>
+                              </div>
+                            )}
+                            {q.chunk_attribution && (
+                              <>
+                                <div className="qr-item">
+                                  <span className="qr-label"><Database size={11} /> Source</span>
+                                  <span className="qr-value">{q.chunk_attribution.source_title}</span>
+                                </div>
+                                {q.chunk_attribution.why_this_chunk && (
+                                  <div className="qr-item qr-why">
+                                    <span className="qr-label"><MessageSquare size={11} /> Editorial Reasoning</span>
+                                    <p>{q.chunk_attribution.why_this_chunk}</p>
+                                  </div>
+                                )}
+                                {q.chunk_attribution.chunk_content && (
+                                  <div className="qr-item">
+                                    <span className="qr-label"><FileText size={11} /> Chunk That Inspired This</span>
+                                    <code className="qr-chunk">{q.chunk_attribution.chunk_content}</code>
+                                  </div>
+                                )}
+                              </>
+                            )}
+                            {q.contingency && (
+                              <div className="qr-item">
+                                <span className="qr-label"><GitBranch size={11} /> Contingency (if short answer)</span>
+                                <span className="qr-value qr-contingency">{q.contingency}</span>
+                              </div>
+                            )}
+                            {q.estimated_minutes && (
+                              <div className="qr-item">
+                                <span className="qr-label"><Activity size={11} /> Estimated Time</span>
+                                <span className="qr-value">~{q.estimated_minutes} min</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               ))}
             </div>
@@ -273,9 +450,18 @@ const App: React.FC = () => {
       <header className="chat-header">
         <div className="chat-header-left">
           <button className="chat-logo-btn" onClick={() => setView('landing')}><BrainCircuit size={18} /></button>
-          <div className="chat-header-info"><h1>Live Interview</h1></div>
+          <div className="chat-header-info">
+            <h1>Live Interview</h1>
+            <span style={{fontSize: '10px', color: '#64748b', fontFamily: 'monospace'}}>{sessionId.slice(0, 8)}</span>
+          </div>
         </div>
         <div className="chat-header-right">
+          <button className="btn-ghost" onClick={downloadTranscript} style={{marginRight: '8px'}}>
+            <CloudDownload size={14} style={{marginRight: '4px', verticalAlign: '-2px'}}/> Download
+          </button>
+          <button className="btn-ghost" onClick={() => setView('script_preview')} style={{marginRight: '12px'}}>
+            <FileText size={14} style={{marginRight: '4px', verticalAlign: '-2px'}}/> View Script
+          </button>
           <div className="progress-section"><label>Progress</label><span>{scriptProgress}</span></div>
         </div>
       </header>

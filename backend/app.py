@@ -15,16 +15,26 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi
 
-from prompts import (
-    JOURNALIST_BASE_PERSONA, 
-    THEME_EXTRACTION_PROMPT, 
-    SCRIPT_CRAFTING_PROMPT, 
-    SCRIPT_AWARE_EVALUATION_PROMPT, 
-    GENERATION_PHASE_PROMPT,
-    INTENT_CLASSIFIER_PROMPT,
-    TACIT_KNOWLEDGE_SYNTHESIS_PROMPT
-)
-
+try:
+    from .prompts import (
+        JOURNALIST_BASE_PERSONA,
+        THEME_EXTRACTION_PROMPT,
+        SCRIPT_CRAFTING_PROMPT,
+        SCRIPT_AWARE_EVALUATION_PROMPT,
+        GENERATION_PHASE_PROMPT,
+        INTENT_CLASSIFIER_PROMPT,
+        TACIT_KNOWLEDGE_SYNTHESIS_PROMPT,
+    )
+except ImportError:
+    from prompts import (
+        JOURNALIST_BASE_PERSONA,
+        THEME_EXTRACTION_PROMPT,
+        SCRIPT_CRAFTING_PROMPT,
+        SCRIPT_AWARE_EVALUATION_PROMPT,
+        GENERATION_PHASE_PROMPT,
+        INTENT_CLASSIFIER_PROMPT,
+        TACIT_KNOWLEDGE_SYNTHESIS_PROMPT,
+    )
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

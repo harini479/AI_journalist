@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
-import { 
-  Mic, MicOff, Send, BrainCircuit, ChevronRight, ShieldCheck, 
-  CloudDownload, Loader2, CheckCircle, Activity, 
+import {
+  Mic, MicOff, Send, BrainCircuit, ChevronRight, ShieldCheck,
+  CloudDownload, Loader2, CheckCircle, Activity,
   FileText, Play, Sparkles, Cpu, Eye, Database, GitBranch, Target, MessageSquare
 } from 'lucide-react';
 
@@ -61,14 +61,23 @@ const App: React.FC = () => {
   const [expandedQuestions, setExpandedQuestions] = useState<Set<string>>(new Set());
   const [showFramework, setShowFramework] = useState(false);
   const [scriptProgress, setScriptProgress] = useState<string>('0/0');
-  
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
+
+  const generateSessionId = () => {
+    if (window.crypto?.randomUUID) {
+      return window.crypto.randomUUID();
+    }
+
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  };
+
+  const [sessionId, setSessionId] = useState(() => generateSessionId());
 
   const resetSession = () => {
-    const newId = crypto.randomUUID();
+    const newId = generateSessionId();
     setSessionId(newId);
     setMessages([]);
     setScript(null);
@@ -274,9 +283,9 @@ const App: React.FC = () => {
             <BrainCircuit size={22} style={{ color: 'var(--accent)' }} />
             <div><small>Research Complete</small><h1>Interview Blueprint</h1></div>
           </div>
-          <div style={{display:'flex',gap:10,alignItems:'center'}}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <button className="btn-ghost" onClick={() => setShowFramework(!showFramework)}>
-              <Cpu size={14} style={{marginRight:4,verticalAlign:-2}}/>{showFramework ? 'Hide' : 'Show'} Framework
+              <Cpu size={14} style={{ marginRight: 4, verticalAlign: -2 }} />{showFramework ? 'Hide' : 'Show'} Framework
             </button>
             <button className="btn-go-live" onClick={() => setView('interview')}>
               {messages.length > 0 ? 'Return to Interview' : 'Launch Interview'} <Play size={16} />
@@ -431,7 +440,7 @@ const App: React.FC = () => {
     return (
       <div className="ingest-page">
         <div className="ingest-card">
-          <button className="back-link" onClick={() => setView('landing')}><ChevronRight size={14} style={{transform: 'rotate(180deg)'}} /> Back</button>
+          <button className="back-link" onClick={() => setView('landing')}><ChevronRight size={14} style={{ transform: 'rotate(180deg)' }} /> Back</button>
           <h2>Ingestion Hub</h2>
           <div className="input-group">
             <label>YouTube Source URL</label>
@@ -452,15 +461,15 @@ const App: React.FC = () => {
           <button className="chat-logo-btn" onClick={() => setView('landing')}><BrainCircuit size={18} /></button>
           <div className="chat-header-info">
             <h1>Live Interview</h1>
-            <span style={{fontSize: '10px', color: '#64748b', fontFamily: 'monospace'}}>{sessionId.slice(0, 8)}</span>
+            <span style={{ fontSize: '10px', color: '#64748b', fontFamily: 'monospace' }}>{sessionId.slice(0, 8)}</span>
           </div>
         </div>
         <div className="chat-header-right">
-          <button className="btn-ghost" onClick={downloadTranscript} style={{marginRight: '8px'}}>
-            <CloudDownload size={14} style={{marginRight: '4px', verticalAlign: '-2px'}}/> Download
+          <button className="btn-ghost" onClick={downloadTranscript} style={{ marginRight: '8px' }}>
+            <CloudDownload size={14} style={{ marginRight: '4px', verticalAlign: '-2px' }} /> Download
           </button>
-          <button className="btn-ghost" onClick={() => setView('script_preview')} style={{marginRight: '12px'}}>
-            <FileText size={14} style={{marginRight: '4px', verticalAlign: '-2px'}}/> View Script
+          <button className="btn-ghost" onClick={() => setView('script_preview')} style={{ marginRight: '12px' }}>
+            <FileText size={14} style={{ marginRight: '4px', verticalAlign: '-2px' }} /> View Script
           </button>
           <div className="progress-section"><label>Progress</label><span>{scriptProgress}</span></div>
         </div>

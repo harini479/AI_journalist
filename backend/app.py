@@ -15,7 +15,7 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi
 
-from prompts import (
+from .prompts import (
     JOURNALIST_BASE_PERSONA, 
     THEME_EXTRACTION_PROMPT, 
     SCRIPT_CRAFTING_PROMPT, 
@@ -466,4 +466,4 @@ def save_message(db_session_id: str, role: str, content: str, input_source: str 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=9120)

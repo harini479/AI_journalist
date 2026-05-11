@@ -41,7 +41,7 @@ interface InterviewScript {
   };
 }
 
-const API_BASE = 'http://localhost:8001';
+const API_BASE = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:9120`;
 
 const App: React.FC = () => {
   const [view, setView] = useState<'landing' | 'research' | 'script_preview' | 'interview' | 'ingest'>('landing');

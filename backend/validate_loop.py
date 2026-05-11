@@ -1,7 +1,7 @@
 import requests
 import json
 
-BASE_URL = "http://localhost:8001"
+BASE_URL = "http://localhost:9120"
 
 def test_interview_loop():
     print("--- TESTING AGENTIC INTERVIEW LOOP ---")

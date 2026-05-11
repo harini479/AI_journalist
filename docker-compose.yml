@@ -1,0 +1,44 @@
+# ============================================
+# AI Journalist — Docker Compose
+# ============================================
+# Usage:
+#   1. Copy backend/.env.example → backend/.env
+#   2. Fill in your API keys (Supabase, OpenAI, Deepgram)
+#   3. docker compose up --build -d
+#   4. Open http://<your-vps-ip> in browser
+#
+# One-time data ingestion (after first deploy):
+#   docker compose exec backend python -m backend.ingest_data
+# ============================================
+
+services:
+  # ── Backend: FastAPI + Uvicorn ──────────────
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: ai-journalist-backend
+    env_file:
+      - ./backend/.env
+    ports:
+      - "9120:9120"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9120/openapi.json')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+  # ── Frontend: React SPA via Nginx ───────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ai-journalist-frontend
+    ports:
+      - "9110:9110"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped

@@ -1,0 +1,46 @@
+# === Git ===
+.git
+.gitignore
+
+# === Python ===
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.pytest_cache
+backend/knowledge_hub.db
+backend/backups
+
+# === Node ===
+frontend/node_modules
+frontend/dist
+frontend/.env.development
+
+# === Environment secrets ===
+backend/.env
+
+# === IDE / OS ===
+.vscode
+.idea
+*.swp
+*.swo
+Thumbs.db
+.DS_Store
+
+# === Scratch / Generated ===
+scratch/
+generate_arch_docs.py
+generate_detailed_arch_docs.py
+
+# === Non-essential docs (keep video transcripts + PDF for ingestion) ===
+docs/Architecture_Docs
+docs/Detailed_Architecture_Specs
+docs/decision_engine_plan.md
+docs/ingestion.md
+docs/retrieval.md
+docs/script_engine_plan.md
+docs/implementation plan.docx
+docs/Business Overview*.docx
+docs/High-Level Architecture*.docx
+docs/Low-Level Architecture*.docx
+README.md

@@ -24,7 +24,7 @@ services:
       - "9120:9120"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9120/openapi.json')"]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9120/openapi.json')" ]
       interval: 30s
       timeout: 10s
       start_period: 15s
@@ -42,3 +42,10 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
+
+networks:
+  default:
+    name: ai-journalist-net
+    ipam:
+      config:
+        - subnet: 10.250.10.0/24

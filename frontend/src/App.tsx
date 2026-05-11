@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import { 
-  Mic, MicOff, Send, BrainCircuit, ChevronRight, History, ShieldCheck, 
-  CloudDownload, Link, Loader2, CheckCircle, Terminal, Activity, 
-  FileText, Map, Compass, Play, BookOpen, Sparkles, Layers, Globe, Cpu, Eye, EyeOff, Database, GitBranch, Target, MessageSquare
+  Mic, MicOff, Send, BrainCircuit, ChevronRight, ShieldCheck, 
+  CloudDownload, Loader2, CheckCircle, Activity, 
+  FileText, Play, Sparkles, Cpu, Eye, Database, GitBranch, Target, MessageSquare
 } from 'lucide-react';
 
 interface Decision {
@@ -47,13 +47,13 @@ const App: React.FC = () => {
   const [view, setView] = useState<'landing' | 'research' | 'script_preview' | 'interview' | 'ingest'>('landing');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isRecording, setIsRecording] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [_isTranscribing, setIsTranscribing] = useState(false);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [researchStep, setResearchStep] = useState(0);
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [ingestionStatus, setIngestionStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [ingestionResult, setIngestionResult] = useState<string>('');
+  const [_ingestionResult, setIngestionResult] = useState<string>('');
   const [script, setScript] = useState<InterviewScript | null>(null);
   const [themes, setThemes] = useState<any[]>([]);
   const [openDecisionId, setOpenDecisionId] = useState<string | null>(null);
@@ -83,7 +83,7 @@ const App: React.FC = () => {
 
   const downloadTranscript = () => {
     const header = `=== AI JOURNALIST — INTERVIEW TRANSCRIPT ===\nSession ID: ${sessionId}\nDate: ${new Date().toISOString().split('T')[0]}\nProgress: ${scriptProgress}\n${'='.repeat(50)}\n\n`;
-    const body = messages.map((msg, i) => {
+    const body = messages.map((msg) => {
       const role = msg.role === 'expert' ? 'EXPERT' : 'AI JOURNALIST';
       const time = new Date(msg.timestamp).toLocaleTimeString();
       let entry = `[${time}] ${role}:\n${msg.text}\n`;

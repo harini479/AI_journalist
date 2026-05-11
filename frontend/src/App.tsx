@@ -3,7 +3,9 @@ import axios from 'axios';
 import {
   Mic, MicOff, Send, BrainCircuit, ChevronRight, ShieldCheck,
   CloudDownload, Loader2, CheckCircle, Activity,
-  FileText, Play, Sparkles, Cpu, Eye, Database, GitBranch, Target, MessageSquare
+  FileText, Play, Sparkles, Cpu, Eye, Database, GitBranch, Target, MessageSquare,
+  Upload, Trash2, AlertCircle, FolderOpen, Zap, BookOpen, Lightbulb, Crosshair,
+  Swords, Route, HelpCircle, BarChart3, StopCircle
 } from 'lucide-react';
 
 interface Decision {
@@ -41,10 +43,10 @@ interface InterviewScript {
   };
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:9120`;
+const API_BASE = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:8001`;
 
 const App: React.FC = () => {
-  const [view, setView] = useState<'landing' | 'research' | 'script_preview' | 'interview' | 'ingest'>('landing');
+  const [view, setView] = useState<'landing' | 'research' | 'script_preview' | 'interview' | 'ingest' | 'report'>('landing');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [_isTranscribing, setIsTranscribing] = useState(false);
@@ -54,6 +56,11 @@ const App: React.FC = () => {
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [ingestionStatus, setIngestionStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [_ingestionResult, setIngestionResult] = useState<string>('');
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [uploadProgress, setUploadProgress] = useState<{filename: string; status: string; chunks?: number}[]>([]);
+  const [knowledgeSources, setKnowledgeSources] = useState<any[]>([]);
+  const [sourcesLoading, setSourcesLoading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [script, setScript] = useState<InterviewScript | null>(null);
   const [themes, setThemes] = useState<any[]>([]);
   const [openDecisionId, setOpenDecisionId] = useState<string | null>(null);
@@ -61,6 +68,8 @@ const App: React.FC = () => {
   const [expandedQuestions, setExpandedQuestions] = useState<Set<string>>(new Set());
   const [showFramework, setShowFramework] = useState(false);
   const [scriptProgress, setScriptProgress] = useState<string>('0/0');
+  const [knowledgeReport, setKnowledgeReport] = useState<any>(null);
+  const [isSynthesizing, setIsSynthesizing] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -87,7 +96,46 @@ const App: React.FC = () => {
     setExpandedThemes(new Set());
     setExpandedQuestions(new Set());
     setOpenDecisionId(null);
+    setKnowledgeReport(null);
     setView('landing');
+  };
+
+  const handleSynthesizeKnowledge = async () => {
+    setIsSynthesizing(true);
+    try {
+      const res = await axios.post(`${API_BASE}/synthesize-knowledge/${sessionId}`, {}, { timeout: 300000 });
+      if (res.data.status === 'success') {
+        setKnowledgeReport(res.data.report);
+        setView('report');
+      } else {
+        alert('Synthesis failed: ' + (res.data.message || 'Unknown error'));
+      }
+    } catch (e: any) {
+      console.error('Synthesis error:', e);
+      alert('Failed to synthesize knowledge: ' + (e.response?.data?.detail || e.message));
+    } finally {
+      setIsSynthesizing(false);
+    }
+  };
+
+  const handleEndInterview = async () => {
+    if (!confirm('End the interview now? This will stop the session and extract tacit knowledge from what has been covered so far.')) return;
+    setIsSynthesizing(true);
+    try {
+      const res = await axios.post(`${API_BASE}/end-interview/${sessionId}`, {}, { timeout: 300000 });
+      if (res.data.report) {
+        setKnowledgeReport(res.data.report);
+        setView('report');
+      } else {
+        alert(res.data.message || 'Interview ended.');
+        setView('landing');
+      }
+    } catch (e: any) {
+      console.error('End interview error:', e);
+      alert('Failed to end interview: ' + (e.response?.data?.detail || e.message));
+    } finally {
+      setIsSynthesizing(false);
+    }
   };
 
   const downloadTranscript = () => {
@@ -126,14 +174,15 @@ const App: React.FC = () => {
       setTimeout(() => setResearchStep(3), 4000);
       const response = await axios.post(`${API_BASE}/prepare-interview`, {
         user_session_id: sessionId,
-        topic: "Technical Scaling in SaaS"
-      });
+      }, { timeout: 120000 });
       setScript(response.data.script);
       setThemes(response.data.themes);
       setResearchStep(4);
       setTimeout(() => setView('script_preview'), 1000);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Preparation error:", error);
+      const detail = error?.response?.data?.detail || error?.message || 'Unknown error';
+      alert(`Interview preparation failed: ${detail}\n\nPlease make sure the backend server is running on port 8001 and try again.`);
       setView('landing');
     }
   };
@@ -203,7 +252,69 @@ const App: React.FC = () => {
       const res = await axios.post(`${API_BASE}/ingest-youtube`, { url: youtubeUrl });
       setIngestionStatus('success');
       setIngestionResult(res.data.message);
+      loadKnowledgeSources();
     } catch (e) { setIngestionStatus('error'); }
+  };
+
+  const loadKnowledgeSources = async () => {
+    setSourcesLoading(true);
+    try {
+      const res = await axios.get(`${API_BASE}/knowledge-sources`);
+      setKnowledgeSources(res.data.sources || []);
+    } catch (e) { console.error('Failed to load sources:', e); }
+    finally { setSourcesLoading(false); }
+  };
+
+  const handleFileUpload = async () => {
+    if (uploadFiles.length === 0) return;
+    setIngestionStatus('loading');
+    setUploadProgress([]);
+    try {
+      const formData = new FormData();
+      uploadFiles.forEach(f => formData.append('files', f));
+      const res = await axios.post(`${API_BASE}/ingest-documents`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 300000,
+      });
+      setUploadProgress(res.data.results || []);
+      setIngestionStatus('success');
+      setUploadFiles([]);
+      loadKnowledgeSources();
+    } catch (e: any) {
+      console.error('Upload error:', e);
+      setIngestionStatus('error');
+      setUploadProgress([{ filename: 'Upload', status: 'error', chunks: 0 }]);
+    }
+  };
+
+  const handleDeleteSource = async (sourceId: string) => {
+    if (!confirm('Delete this source and all its chunks?')) return;
+    try {
+      await axios.delete(`${API_BASE}/knowledge-sources/${sourceId}`);
+      loadKnowledgeSources();
+    } catch (e) { console.error('Delete error:', e); }
+  };
+
+  const handleDeleteAllSources = async () => {
+    if (!confirm('Delete ALL knowledge sources? This cannot be undone.')) return;
+    try {
+      await axios.delete(`${API_BASE}/knowledge-sources`);
+      setKnowledgeSources([]);
+    } catch (e) { console.error('Delete all error:', e); }
+  };
+
+  const handleFileDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer.files).filter(f =>
+      f.name.endsWith('.docx') || f.name.endsWith('.pdf') || f.name.endsWith('.txt')
+    );
+    setUploadFiles(prev => [...prev, ...files]);
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      setUploadFiles(prev => [...prev, ...Array.from(e.target.files!)]);
+    }
   };
 
   if (view === 'landing') {
@@ -437,18 +548,311 @@ const App: React.FC = () => {
   }
 
   if (view === 'ingest') {
+    // Load sources on first render of ingest view
+    if (knowledgeSources.length === 0 && !sourcesLoading) {
+      loadKnowledgeSources();
+    }
     return (
       <div className="ingest-page">
-        <div className="ingest-card">
-          <button className="back-link" onClick={() => setView('landing')}><ChevronRight size={14} style={{ transform: 'rotate(180deg)' }} /> Back</button>
-          <h2>Ingestion Hub</h2>
-          <div className="input-group">
-            <label>YouTube Source URL</label>
-            <input className="input-field" type="text" value={youtubeUrl} onChange={e => setYoutubeUrl(e.target.value)} />
-          </div>
-          <button className="btn-full" onClick={handleIngest} disabled={ingestionStatus === 'loading'}>
-            {ingestionStatus === 'loading' ? 'Processing...' : 'Synchronize Knowledge'}
+        <div className="ingest-container">
+          <button className="back-link" onClick={() => setView('landing')}>
+            <ChevronRight size={14} style={{ transform: 'rotate(180deg)' }} /> Back to Home
           </button>
+          <h2 style={{ fontSize: '24px', fontWeight: 700, marginBottom: '4px' }}>
+            <Database size={20} style={{ verticalAlign: '-3px', marginRight: '8px', color: '#818cf8' }} />
+            Knowledge Hub
+          </h2>
+          <p style={{ color: '#94a3b8', fontSize: '13px', marginBottom: '24px' }}>Upload documents to build your interview knowledge base</p>
+
+          {/* File Upload Area */}
+          <div
+            className="upload-dropzone"
+            onDragOver={e => e.preventDefault()}
+            onDrop={handleFileDrop}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".docx,.pdf,.txt"
+              onChange={handleFileSelect}
+              style={{ display: 'none' }}
+            />
+            <Upload size={32} style={{ color: '#818cf8', marginBottom: '12px' }} />
+            <p style={{ fontWeight: 600, fontSize: '15px', marginBottom: '4px' }}>Drop files here or click to browse</p>
+            <p style={{ color: '#64748b', fontSize: '12px' }}>Supports: DOCX, PDF, TXT</p>
+          </div>
+
+          {/* Selected Files List */}
+          {uploadFiles.length > 0 && (
+            <div className="upload-file-list">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <span style={{ fontSize: '13px', fontWeight: 600 }}>{uploadFiles.length} file{uploadFiles.length > 1 ? 's' : ''} selected</span>
+                <button className="btn-ghost" style={{ fontSize: '11px', padding: '4px 8px' }} onClick={() => setUploadFiles([])}>Clear All</button>
+              </div>
+              {uploadFiles.map((f, i) => (
+                <div key={i} className="upload-file-item">
+                  <FileText size={14} style={{ color: '#818cf8', flexShrink: 0 }} />
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                  <span style={{ color: '#64748b', fontSize: '11px', flexShrink: 0 }}>{(f.size / 1024).toFixed(0)} KB</span>
+                  <button style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '2px' }}
+                    onClick={(e) => { e.stopPropagation(); setUploadFiles(prev => prev.filter((_, idx) => idx !== i)); }}>
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+              <button
+                className="btn-primary"
+                style={{ width: '100%', marginTop: '12px', justifyContent: 'center' }}
+                onClick={handleFileUpload}
+                disabled={ingestionStatus === 'loading'}
+              >
+                {ingestionStatus === 'loading' ? (
+                  <><Loader2 size={14} className="spin" /> Ingesting...</>
+                ) : (
+                  <><Upload size={14} /> Ingest {uploadFiles.length} File{uploadFiles.length > 1 ? 's' : ''}</>
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* Upload Results */}
+          {uploadProgress.length > 0 && (
+            <div className="upload-results">
+              <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '8px' }}>Ingestion Results</h3>
+              {uploadProgress.map((r, i) => (
+                <div key={i} className={`upload-result-item ${r.status}`}>
+                  {r.status === 'success' ? <CheckCircle size={14} style={{ color: '#22c55e' }} /> :
+                   r.status === 'error' ? <AlertCircle size={14} style={{ color: '#ef4444' }} /> :
+                   <Loader2 size={14} className="spin" />}
+                  <span style={{ flex: 1 }}>{r.filename}</span>
+                  <span style={{ color: '#64748b', fontSize: '11px' }}>
+                    {r.status === 'success' ? `${r.chunks} chunks` : r.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+
+          {/* Existing Knowledge Sources */}
+          <div style={{ marginTop: '32px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <h3 style={{ fontSize: '14px', fontWeight: 600 }}>
+                <FolderOpen size={14} style={{ verticalAlign: '-2px', marginRight: '6px', color: '#818cf8' }} />
+                Knowledge Sources ({knowledgeSources.length})
+              </h3>
+              {knowledgeSources.length > 0 && (
+                <button className="btn-ghost" style={{ fontSize: '11px', color: '#ef4444', padding: '4px 8px' }} onClick={handleDeleteAllSources}>
+                  <Trash2 size={11} style={{ marginRight: '4px' }} /> Clear All
+                </button>
+              )}
+            </div>
+            {sourcesLoading ? (
+              <div style={{ textAlign: 'center', padding: '20px', color: '#64748b' }}><Loader2 size={18} className="spin" /></div>
+            ) : knowledgeSources.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '32px', color: '#475569', fontSize: '13px', border: '1px dashed #1e293b', borderRadius: '12px' }}>
+                No sources ingested yet. Upload documents above to get started.
+              </div>
+            ) : (
+              <div className="sources-list">
+                {knowledgeSources.map(s => (
+                  <div key={s.id} className="source-item">
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 500, fontSize: '13px' }}>{s.title}</div>
+                      <div style={{ color: '#64748b', fontSize: '11px', marginTop: '2px' }}>
+                        {s.source_type} · {s.chunk_count} chunks · {new Date(s.created_at).toLocaleDateString()}
+                      </div>
+                    </div>
+                    <button
+                      style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '4px' }}
+                      onClick={() => handleDeleteSource(s.id)}
+                      title="Delete source"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ======= TACIT KNOWLEDGE REPORT VIEW =======
+  if (view === 'report' && knowledgeReport) {
+    const r = knowledgeReport;
+    return (
+      <div className="report-page">
+        <div className="report-container">
+          <button className="back-link" onClick={() => setView('interview')}>
+            <ChevronRight size={14} style={{ transform: 'rotate(180deg)' }} /> Back to Interview
+          </button>
+
+          {/* Report Header */}
+          <div className="report-header">
+            <div className="report-badge"><Zap size={12} /> TACIT KNOWLEDGE REPORT</div>
+            <h1 className="report-title">{r.report_title || 'Knowledge Report'}</h1>
+            <p className="report-domain">{r.expert_domain}</p>
+            <div className="report-stats">
+              <div className="report-stat">
+                <BarChart3 size={16} />
+                <div>
+                  <span className="stat-number">{r.interview_depth_score}/10</span>
+                  <span className="stat-label">Depth Score</span>
+                </div>
+              </div>
+              <div className="report-stat">
+                <Lightbulb size={16} />
+                <div>
+                  <span className="stat-number">{r.total_insights_extracted}</span>
+                  <span className="stat-label">Insights</span>
+                </div>
+              </div>
+              <div className="report-stat">
+                <BookOpen size={16} />
+                <div>
+                  <span className="stat-number">{r.war_stories?.length || 0}</span>
+                  <span className="stat-label">War Stories</span>
+                </div>
+              </div>
+              <div className="report-stat">
+                <Route size={16} />
+                <div>
+                  <span className="stat-number">{r.actionable_playbooks?.length || 0}</span>
+                  <span className="stat-label">Playbooks</span>
+                </div>
+              </div>
+            </div>
+            <p className="report-summary">{r.summary}</p>
+          </div>
+
+          {/* Tacit Insights */}
+          {r.tacit_insights?.length > 0 && (
+            <div className="report-section">
+              <h2 className="section-title"><Lightbulb size={18} /> Tacit Insights</h2>
+              <div className="report-cards">
+                {r.tacit_insights.map((item: any) => (
+                  <div key={item.id} className="report-card insight-card">
+                    <div className="card-header">
+                      <span className={`confidence-badge ${item.confidence?.toLowerCase()}`}>{item.confidence}</span>
+                      <span className="card-theme">{item.theme}</span>
+                    </div>
+                    <p className="card-insight">{item.insight}</p>
+                    <p className="card-why"><strong>Why tacit:</strong> {item.why_tacit}</p>
+                    <blockquote className="card-quote">"{item.expert_quote}"</blockquote>
+                    <p className="card-source">Triggered by: {item.source_question}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Mental Models */}
+          {r.mental_models?.length > 0 && (
+            <div className="report-section">
+              <h2 className="section-title"><Cpu size={18} /> Mental Models</h2>
+              <div className="report-cards">
+                {r.mental_models.map((item: any) => (
+                  <div key={item.id} className="report-card model-card">
+                    <h3 className="model-name">{item.model_name}</h3>
+                    <p className="card-desc">{item.description}</p>
+                    <p className="card-application"><strong>Application:</strong> {item.application}</p>
+                    <blockquote className="card-quote">"{item.expert_quote}"</blockquote>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Pattern Breaks */}
+          {r.pattern_breaks?.length > 0 && (
+            <div className="report-section">
+              <h2 className="section-title"><Swords size={18} /> Pattern Breaks</h2>
+              <div className="report-cards">
+                {r.pattern_breaks.map((item: any) => (
+                  <div key={item.id} className="report-card break-card">
+                    <div className="break-comparison">
+                      <div className="break-conventional">
+                        <span className="break-label">Conventional</span>
+                        <p>{item.conventional_approach}</p>
+                      </div>
+                      <div className="break-arrow">→</div>
+                      <div className="break-expert">
+                        <span className="break-label">Expert's Way</span>
+                        <p>{item.expert_approach}</p>
+                      </div>
+                    </div>
+                    <p className="card-reasoning"><strong>Why:</strong> {item.reasoning}</p>
+                    <blockquote className="card-quote">"{item.expert_quote}"</blockquote>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* War Stories */}
+          {r.war_stories?.length > 0 && (
+            <div className="report-section">
+              <h2 className="section-title"><BookOpen size={18} /> War Stories</h2>
+              <div className="report-cards">
+                {r.war_stories.map((item: any) => (
+                  <div key={item.id} className="report-card story-card">
+                    <h3 className="story-title">{item.title}</h3>
+                    <p className="card-desc">{item.summary}</p>
+                    <div className="story-lesson">
+                      <Crosshair size={14} />
+                      <div>
+                        <strong>Encoded Lesson:</strong>
+                        <p>{item.encoded_lesson}</p>
+                      </div>
+                    </div>
+                    <p className="card-untextbookable"><em>Why untextbookable:</em> {item.why_untextbookable}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Actionable Playbooks */}
+          {r.actionable_playbooks?.length > 0 && (
+            <div className="report-section">
+              <h2 className="section-title"><Route size={18} /> Actionable Playbooks</h2>
+              <div className="report-cards">
+                {r.actionable_playbooks.map((item: any) => (
+                  <div key={item.id} className="report-card playbook-card">
+                    <h3 className="playbook-title">{item.playbook_title}</h3>
+                    <p className="card-context"><strong>When to use:</strong> {item.context}</p>
+                    <ol className="playbook-steps">
+                      {item.steps?.map((step: string, i: number) => (
+                        <li key={i}>{step}</li>
+                      ))}
+                    </ol>
+                    {item.caveats && <p className="card-caveats"><AlertCircle size={12} /> <strong>Caveats:</strong> {item.caveats}</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Knowledge Gaps */}
+          {r.knowledge_gaps?.length > 0 && (
+            <div className="report-section">
+              <h2 className="section-title"><HelpCircle size={18} /> Knowledge Gaps</h2>
+              <div className="report-cards">
+                {r.knowledge_gaps.map((item: any) => (
+                  <div key={item.id} className="report-card gap-card">
+                    <h3 className="gap-topic">{item.topic}</h3>
+                    <p className="card-desc">{item.observation}</p>
+                    <p className="card-followup"><strong>Suggested follow-up:</strong> {item.suggested_followup}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -465,6 +869,14 @@ const App: React.FC = () => {
           </div>
         </div>
         <div className="chat-header-right">
+          <button className="btn-stop" onClick={handleEndInterview} disabled={isSynthesizing} title="End interview and extract knowledge">
+            {isSynthesizing ? <Loader2 size={14} className="spin" /> : <StopCircle size={14} />}
+            <span>Stop Interview</span>
+          </button>
+          <button className="btn-synth" onClick={handleSynthesizeKnowledge} disabled={isSynthesizing} title="Generate Tacit Knowledge Report">
+            {isSynthesizing ? <Loader2 size={14} className="spin" /> : <Zap size={14} />}
+            <span>{isSynthesizing ? 'Synthesizing...' : 'Extract Knowledge'}</span>
+          </button>
           <button className="btn-ghost" onClick={downloadTranscript} style={{ marginRight: '8px' }}>
             <CloudDownload size={14} style={{ marginRight: '4px', verticalAlign: '-2px' }} /> Download
           </button>

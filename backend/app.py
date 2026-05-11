@@ -15,13 +15,14 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi
 
-from .prompts import (
+from prompts import (
     JOURNALIST_BASE_PERSONA, 
     THEME_EXTRACTION_PROMPT, 
     SCRIPT_CRAFTING_PROMPT, 
     SCRIPT_AWARE_EVALUATION_PROMPT, 
     GENERATION_PHASE_PROMPT,
-    INTENT_CLASSIFIER_PROMPT
+    INTENT_CLASSIFIER_PROMPT,
+    TACIT_KNOWLEDGE_SYNTHESIS_PROMPT
 )
 
 # Setup logging
@@ -56,7 +57,7 @@ llm_fast = ChatOpenAI(model="gpt-4o-mini", temperature=0.0, max_tokens=30)
 embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
 
 # Constants
-DEFAULT_TOPIC = "Technical Innovation and Scaling"
+DEFAULT_TOPIC = "Domain expertise as identified from the ingested knowledge base"
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
 TOP_K_RAG = 4
@@ -175,6 +176,202 @@ async def ingest_youtube_endpoint(request: YoutubeIngestRequest):
         return {"status": "success", "message": f"Ingested {len(chunks)} chunks.", "source_id": source_id}
     except Exception as e:
         logger.error(f"Ingestion error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================
+# DOCUMENT FILE UPLOAD INGESTION
+# ============================================================
+
+def _read_file_content(filename: str, file_bytes: bytes) -> str:
+    """Read content from uploaded file bytes based on extension."""
+    ext = filename.lower().rsplit('.', 1)[-1] if '.' in filename else ''
+
+    if ext == 'txt':
+        return file_bytes.decode('utf-8', errors='replace')
+
+    elif ext == 'docx':
+        import docx
+        import io
+        doc = docx.Document(io.BytesIO(file_bytes))
+        return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+
+    elif ext == 'pdf':
+        import fitz  # PyMuPDF
+        import io
+        pdf = fitz.open(stream=file_bytes, filetype="pdf")
+        text_parts = []
+        for page in pdf:
+            text_parts.append(page.get_text())
+        pdf.close()
+        return "\n".join(text_parts)
+
+    else:
+        # Try as plain text
+        return file_bytes.decode('utf-8', errors='replace')
+
+
+def _chunk_text(text: str, chunk_size: int = 800, overlap: int = 100) -> list:
+    """Chunk text into overlapping segments at word boundaries."""
+    text = text.strip()
+    if not text:
+        return []
+
+    chunks = []
+    start = 0
+    segment_num = 1
+
+    while start < len(text):
+        end = start + chunk_size
+
+        if end >= len(text):
+            chunk_text = text[start:].strip()
+            if chunk_text and len(chunk_text) >= 30:
+                chunks.append({
+                    "content": chunk_text,
+                    "location_marker": f"Segment {segment_num}"
+                })
+            break
+
+        # Try to break at a word boundary
+        break_point = text.rfind(' ', start + chunk_size // 2, end)
+        if break_point > start:
+            end = break_point
+
+        chunk_text = text[start:end].strip()
+        if chunk_text and len(chunk_text) >= 30:
+            chunks.append({
+                "content": chunk_text,
+                "location_marker": f"Segment {segment_num}"
+            })
+            segment_num += 1
+
+        start = end - overlap if overlap < (end - start) else end
+
+    return chunks
+
+
+@app.post("/ingest-documents")
+async def ingest_documents_endpoint(files: List[UploadFile] = File(...)):
+    """Ingest uploaded documents (DOCX, PDF, TXT) into the knowledge base."""
+    results = []
+    total_chunks = 0
+
+    for file in files:
+        try:
+            logger.info(f"Ingesting file: {file.filename} ({file.content_type})")
+            file_bytes = await file.read()
+
+            # Extract text from file
+            text = _read_file_content(file.filename, file_bytes)
+            if not text or len(text.strip()) < 50:
+                results.append({
+                    "filename": file.filename,
+                    "status": "skipped",
+                    "reason": "File is empty or too short",
+                    "chunks": 0
+                })
+                continue
+
+            # Create source record
+            source_res = supabase.table("knowledge_sources").insert({
+                "source_type": "document",
+                "title": file.filename,
+                "url_or_identifier": f"upload:{file.filename}"
+            }).execute()
+            source_id = source_res.data[0]['id']
+
+            # Chunk the text
+            chunks = _chunk_text(text)
+            if not chunks:
+                results.append({
+                    "filename": file.filename,
+                    "status": "skipped",
+                    "reason": "No valid chunks produced",
+                    "chunks": 0
+                })
+                continue
+
+            # Embed and store chunks
+            chunk_data = []
+            for idx, chunk in enumerate(chunks):
+                vector = embeddings_model.embed_query(chunk["content"])
+                chunk_data.append({
+                    "source_id": source_id,
+                    "content": chunk["content"],
+                    "location_marker": chunk["location_marker"],
+                    "embedding": vector,
+                    "chunk_index": idx
+                })
+
+            # Insert in batches of 50 to avoid payload limits
+            for i in range(0, len(chunk_data), 50):
+                batch = chunk_data[i:i+50]
+                supabase.table("knowledge_chunks").insert(batch).execute()
+
+            total_chunks += len(chunks)
+            results.append({
+                "filename": file.filename,
+                "status": "success",
+                "source_id": source_id,
+                "chunks": len(chunks),
+                "text_length": len(text)
+            })
+            logger.info(f"  ✓ {file.filename}: {len(chunks)} chunks ingested")
+
+        except Exception as e:
+            logger.error(f"  ✗ {file.filename}: {type(e).__name__}: {e}")
+            results.append({
+                "filename": file.filename,
+                "status": "error",
+                "reason": str(e),
+                "chunks": 0
+            })
+
+    return {
+        "status": "success",
+        "total_files": len(files),
+        "total_chunks": total_chunks,
+        "results": results
+    }
+
+
+@app.get("/knowledge-sources")
+async def list_knowledge_sources():
+    """List all ingested knowledge sources."""
+    try:
+        res = supabase.table("knowledge_sources").select("id, title, source_type, url_or_identifier, created_at").order("created_at", desc=True).execute()
+        sources = res.data or []
+        # Get chunk counts per source
+        for source in sources:
+            count_res = supabase.table("knowledge_chunks").select("id", count="exact").eq("source_id", source["id"]).execute()
+            source["chunk_count"] = count_res.count if count_res.count is not None else 0
+        return {"sources": sources}
+    except Exception as e:
+        logger.error(f"List sources error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/knowledge-sources/{source_id}")
+async def delete_knowledge_source(source_id: str):
+    """Delete a knowledge source and its chunks."""
+    try:
+        supabase.table("knowledge_chunks").delete().eq("source_id", source_id).execute()
+        supabase.table("knowledge_sources").delete().eq("id", source_id).execute()
+        return {"status": "success", "message": f"Deleted source {source_id} and its chunks."}
+    except Exception as e:
+        logger.error(f"Delete source error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/knowledge-sources")
+async def delete_all_knowledge_sources():
+    """Delete all knowledge sources and chunks."""
+    try:
+        supabase.table("knowledge_chunks").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+        supabase.table("knowledge_sources").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+        return {"status": "success", "message": "All knowledge sources and chunks deleted."}
+    except Exception as e:
+        logger.error(f"Delete all sources error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/transcribe")
@@ -409,6 +606,189 @@ async def reactive_generate_question(request, persona):
     gen_res = llm.invoke(GENERATION_PHASE_PROMPT.format(persona=persona, scenario_instruction="Reactive follow-up.", expert_answer=request.expert_answer))
     result = {"question": gen_res.content.strip(), "script_progress": "Reactive", "decision": {"action": "reactive_fallback"}}
     return result
+
+# ============================================================
+# TACIT KNOWLEDGE SYNTHESIS ENGINE
+# ============================================================
+
+@app.post("/end-interview/{session_id}")
+async def end_interview_endpoint(session_id: str):
+    """Kill switch: end interview at current progress and auto-synthesize tacit knowledge."""
+    try:
+        # 1. Get progress info
+        script_res = supabase.table("interview_scripts").select("*").eq("session_id", session_id).execute()
+        if not script_res.data:
+            raise HTTPException(status_code=404, detail="No interview script found for this session")
+        
+        script_record = script_res.data[0]
+        completed = script_record.get("questions_completed", 0)
+        total = script_record.get("total_questions", 0)
+        
+        # 2. Mark interview as completed
+        supabase.table("interview_scripts").update({
+            "status": "ended_early"
+        }).eq("session_id", session_id).execute()
+        
+        # Update session status too
+        session_res = supabase.table("conversation_sessions").select("id").eq("session_id", session_id).execute()
+        if session_res.data:
+            supabase.table("conversation_sessions").update({
+                "status": "completed"
+            }).eq("id", session_res.data[0]["id"]).execute()
+        
+        logger.info(f"Interview ended at {completed}/{total} for session {session_id}. Starting synthesis...")
+        
+        # 3. Auto-trigger synthesis
+        try:
+            report_result = await synthesize_knowledge_endpoint(session_id)
+            return {
+                "status": "success",
+                "message": f"Interview ended at question {completed}/{total}. Knowledge synthesized.",
+                "questions_completed": completed,
+                "total_questions": total,
+                "report": report_result.get("report")
+            }
+        except HTTPException as synth_err:
+            # If synthesis fails (e.g. not enough messages), still return success for the end
+            return {
+                "status": "ended",
+                "message": f"Interview ended at question {completed}/{total}. Not enough data for synthesis yet.",
+                "questions_completed": completed,
+                "total_questions": total,
+                "synthesis_error": synth_err.detail
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"End interview error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/synthesize-knowledge/{session_id}")
+async def synthesize_knowledge_endpoint(session_id: str):
+    """Synthesize tacit knowledge from an interview session (works at any progress point)."""
+    try:
+        # 1. Get the session's DB UUID
+        session_res = supabase.table("conversation_sessions").select("id").eq("session_id", session_id).execute()
+        if not session_res.data:
+            raise HTTPException(status_code=404, detail="Session not found")
+        db_uuid = session_res.data[0]["id"]
+
+        # 2. Fetch all messages for this session
+        messages_res = supabase.table("conversation_messages").select("role, content, message_index").eq("session_id", db_uuid).order("message_index").execute()
+        messages = messages_res.data or []
+        if len(messages) < 4:
+            raise HTTPException(status_code=400, detail="Not enough interview data to synthesize. Answer at least 2 questions first.")
+
+        # 3. Build transcript string
+        transcript_lines = []
+        for msg in messages:
+            role_label = "AI JOURNALIST" if msg["role"] == "ai" else "EXPERT"
+            transcript_lines.append(f"[{role_label}]: {msg['content']}")
+        transcript_text = "\n\n".join(transcript_lines)
+
+        # 4. Get themes and progress from interview script
+        script_res = supabase.table("interview_scripts").select("themes, questions_completed, total_questions").eq("session_id", session_id).execute()
+        themes_text = "[No themes available]"
+        questions_completed = 0
+        total_questions = 0
+        if script_res.data:
+            themes_text = json.dumps(script_res.data[0]["themes"], indent=2)
+            questions_completed = script_res.data[0].get("questions_completed", 0)
+            total_questions = script_res.data[0].get("total_questions", 0)
+
+        # 5. Run the synthesis LLM pass
+        logger.info(f"Synthesizing tacit knowledge for session {session_id} ({len(messages)} messages, {questions_completed}/{total_questions} questions)")
+        synthesis_res = llm.invoke(TACIT_KNOWLEDGE_SYNTHESIS_PROMPT.format(
+            themes=themes_text,
+            transcript=transcript_text
+        ))
+        cleaned = synthesis_res.content.strip()
+        if "```json" in cleaned:
+            cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+        report_data = json.loads(cleaned)
+
+        # 6. Store in dedicated tacit_knowledge_reports table
+        from datetime import datetime, timezone
+        try:
+            # Delete any existing report for this session (re-synthesis)
+            supabase.table("tacit_knowledge_reports").delete().eq("session_id", session_id).execute()
+            
+            supabase.table("tacit_knowledge_reports").insert({
+                "session_id": session_id,
+                "report_title": report_data.get("report_title", "Knowledge Report"),
+                "expert_domain": report_data.get("expert_domain", ""),
+                "interview_depth_score": report_data.get("interview_depth_score", 0),
+                "total_insights_extracted": report_data.get("total_insights_extracted", 0),
+                "summary": report_data.get("summary", ""),
+                "tacit_insights": report_data.get("tacit_insights", []),
+                "mental_models": report_data.get("mental_models", []),
+                "pattern_breaks": report_data.get("pattern_breaks", []),
+                "war_stories": report_data.get("war_stories", []),
+                "actionable_playbooks": report_data.get("actionable_playbooks", []),
+                "knowledge_gaps": report_data.get("knowledge_gaps", []),
+                "messages_analyzed": len(messages),
+                "questions_completed": questions_completed,
+                "total_questions": total_questions
+            }).execute()
+            logger.info(f"Tacit knowledge report saved to tacit_knowledge_reports for session {session_id}")
+            
+            # Also update interview status
+            supabase.table("interview_scripts").update({
+                "status": "synthesized"
+            }).eq("session_id", session_id).execute()
+        except Exception as store_err:
+            logger.warning(f"Could not store report in tacit_knowledge_reports: {store_err}")
+
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "messages_analyzed": len(messages),
+            "questions_completed": questions_completed,
+            "total_questions": total_questions,
+            "report": report_data
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Synthesis error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/knowledge-report/{session_id}")
+async def get_knowledge_report(session_id: str):
+    """Retrieve an existing tacit knowledge report for a session."""
+    try:
+        report_res = supabase.table("tacit_knowledge_reports").select("*").eq("session_id", session_id).order("created_at", desc=True).limit(1).execute()
+        if not report_res.data:
+            return {"status": "not_synthesized", "message": "No knowledge report exists for this session yet."}
+        
+        record = report_res.data[0]
+        # Reconstruct the report format the frontend expects
+        report = {
+            "report_title": record.get("report_title"),
+            "expert_domain": record.get("expert_domain"),
+            "interview_depth_score": record.get("interview_depth_score"),
+            "total_insights_extracted": record.get("total_insights_extracted"),
+            "summary": record.get("summary"),
+            "tacit_insights": record.get("tacit_insights", []),
+            "mental_models": record.get("mental_models", []),
+            "pattern_breaks": record.get("pattern_breaks", []),
+            "war_stories": record.get("war_stories", []),
+            "actionable_playbooks": record.get("actionable_playbooks", []),
+            "knowledge_gaps": record.get("knowledge_gaps", [])
+        }
+        return {
+            "status": "success",
+            "report": report,
+            "questions_completed": record.get("questions_completed"),
+            "total_questions": record.get("total_questions"),
+            "created_at": record.get("created_at")
+        }
+    except Exception as e:
+        logger.error(f"Get report error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # --- PERSISTENCE HELPERS ---
 

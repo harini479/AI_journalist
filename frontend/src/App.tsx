@@ -53,9 +53,7 @@ const App: React.FC = () => {
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [researchStep, setResearchStep] = useState(0);
-  const [youtubeUrl, setYoutubeUrl] = useState('');
   const [ingestionStatus, setIngestionStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [_ingestionResult, setIngestionResult] = useState<string>('');
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploadProgress, setUploadProgress] = useState<{filename: string; status: string; chunks?: number}[]>([]);
   const [knowledgeSources, setKnowledgeSources] = useState<any[]>([]);
@@ -245,16 +243,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleIngest = async () => {
-    if (!youtubeUrl.trim()) return;
-    setIngestionStatus('loading');
-    try {
-      const res = await axios.post(`${API_BASE}/ingest-youtube`, { url: youtubeUrl });
-      setIngestionStatus('success');
-      setIngestionResult(res.data.message);
-      loadKnowledgeSources();
-    } catch (e) { setIngestionStatus('error'); }
-  };
+
 
   const loadKnowledgeSources = async () => {
     setSourcesLoading(true);
